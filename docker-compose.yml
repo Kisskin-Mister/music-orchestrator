@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Postgres-ready local option. The MVP defaults to SQLite; switch APP_DATABASE_URL manually.
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: music_orchestrator
+      POSTGRES_USER: music_orchestrator
+      POSTGRES_PASSWORD: change-me-local-only
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

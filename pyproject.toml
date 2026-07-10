@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "music-orchestrator"
+version = "0.1.0"
+description = "Backend-first compliant music orchestration MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{ name = "Music Orchestrator contributors" }]
+dependencies = [
+  "fastapi>=0.111,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "pydantic-settings>=2.3,<3",
+  "sqlmodel>=0.0.21,<1",
+  "httpx>=0.27,<1",
+  "python-multipart>=0.0.9,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9",
+  "pytest-asyncio>=0.23,<1",
+  "ruff>=0.5,<1",
+]
+
+[project.scripts]
+music-orchestrator = "music_orchestrator.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/music_orchestrator"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
