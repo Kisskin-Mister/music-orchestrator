@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "Music Orchestrator — музыкальный командный центр",
+  "entry": "music-orchestrator-cockpit.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "primary": true,
+  "createdAt": "2026-07-17T16:25:18.029Z",
+  "updatedAt": "2026-07-17T16:25:18.033Z",
+  "metadata": {
+    "identifier": "music-orchestrator-cockpit",
+    "artifactType": "text/html",
+    "inferred": false
+  }
+}

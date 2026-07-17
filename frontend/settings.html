@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0c0f">
+  <title>Music Orchestrator — Настройки</title>
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="rail" aria-label="Основная навигация">
+      <a class="brand" href="index.html" aria-label="Music Orchestrator — главная">
+        <span class="brand-mark"><span class="brand-wave"><i></i><i></i><i></i><i></i><i></i></span></span>
+        <span>Music Orchestrator</span>
+      </a>
+      <div class="rail-group">
+        <div class="rail-label">Музыка</div>
+        <a class="nav-item" href="index.html"><svg><use href="assets/sprite.svg#search"/></svg><span>Поиск</span></a>
+        <a class="nav-item" href="library.html"><svg><use href="assets/sprite.svg#library"/></svg><span>Медиатека</span></a>
+        <a class="nav-item" href="favorites.html"><svg><use href="assets/sprite.svg#heart"/></svg><span>Любимые треки</span></a>
+        <a class="nav-item" href="playlists.html"><svg><use href="assets/sprite.svg#list"/></svg><span>Плейлисты</span></a>
+      </div>
+      <div class="rail-group">
+        <div class="rail-label">Сервер</div>
+        <a class="nav-item" href="downloads.html"><svg><use href="assets/sprite.svg#download"/></svg><span>Загрузки</span></a>
+        <a class="nav-item active" href="settings.html"><svg><use href="assets/sprite.svg#settings"/></svg><span>Настройки</span></a>
+      </div>
+      <div class="rail-bottom">
+        <div class="connection">
+          <div class="connection-top"><span>Backend доступен</span><i class="dot"></i></div>
+          <code>127.0.0.1:8080 · 24 мс</code>
+        </div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="page-heading">
+        <div>
+          <p class="eyebrow">Локальный экземпляр</p>
+          <h1>Настройки</h1>
+          <p>Подключение к Go API, источники, приватность и правила сохранения музыки.</p>
+        </div>
+      </header>
+
+      <div class="settings-grid">
+        <nav class="settings-tabs" aria-label="Разделы настроек" role="tablist">
+          <button type="button" class="active" data-settings-tab="connection" role="tab">Подключение</button>
+          <button type="button" data-settings-tab="providers" role="tab">Источники</button>
+          <button type="button" data-settings-tab="streams" role="tab">Временные потоки</button>
+          <button type="button" data-settings-tab="privacy" role="tab">Приватность</button>
+          <button type="button" data-settings-tab="about" role="tab">О системе</button>
+        </nav>
+
+        <div class="settings-content">
+          <section class="settings-panel" data-settings-panel="connection" role="tabpanel">
+            <div class="panel">
+              <div class="section-head">
+                <h2>Подключение к API</h2>
+                <span class="signal">Онлайн</span>
+              </div>
+              <div class="form-group">
+                <label for="base-url">Базовый URL</label>
+                <input class="field" id="base-url" value="http://127.0.0.1:8080" spellcheck="false" autocomplete="url">
+              </div>
+              <div class="form-group">
+                <label for="api-key">X-API-Key</label>
+                <div class="field-row">
+                  <input class="field" id="api-key" type="password" value="change-me-local-dev-key" autocomplete="off">
+                  <button class="btn" id="test-api" type="button">Проверить соединение</button>
+                </div>
+                <p class="help">Ключ остаётся в локальной конфигурации и никогда не попадает в analytics.</p>
+              </div>
+              <div class="stat-line"><small>Health endpoint</small><strong>GET /health · 24 мс</strong></div>
+              <div class="stat-line"><small>Схема API</small><strong>GET /openapi.json</strong></div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="providers" role="tabpanel" hidden>
+            <div class="panel">
+              <div class="section-head">
+                <h2>Источники</h2>
+                <span class="duration">GET /v1/providers</span>
+              </div>
+              <div class="toggle-line">
+                <div><strong>Локальная медиатека</strong><div class="track-artist">Поиск · постоянный stream · offline-файлы</div></div>
+                <button class="switch on" type="button" role="switch" aria-checked="true" aria-label="Локальная медиатека"></button>
+              </div>
+              <div class="toggle-line">
+                <div><strong>YouTube Official</strong><div class="track-artist">Официальный embed · без локальной копии</div></div>
+                <button class="switch" type="button" role="switch" aria-checked="false" aria-label="YouTube Official"></button>
+              </div>
+              <div class="toggle-line">
+                <div><strong>SoundCloud Official</strong><div class="track-artist">Официальное воспроизведение · требует настройки</div></div>
+                <button class="switch" type="button" role="switch" aria-checked="false" aria-label="SoundCloud Official"></button>
+              </div>
+              <div class="toggle-line">
+                <div><strong>Временные потоки</strong><div class="track-artist">YouTube / SoundCloud · локальное opt-in разрешение</div></div>
+                <button class="switch on" type="button" role="switch" aria-checked="true" aria-label="Временные потоки"></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="streams" role="tabpanel" hidden>
+            <div class="policy-card">
+              <header>
+                <div>
+                  <h3>Временные потоки включены</h3>
+                  <p>Экстрактор используется только на вашем сервере и возвращает ограниченный по времени URL для native audio player.</p>
+                </div>
+                <span class="policy-state">Локальное разрешение</span>
+              </header>
+              <ul class="policy-steps">
+                <li><b>1</b><div><strong>Слушать сейчас</strong>Получает временный stream URL. Файл на сервере не создаётся.</div></li>
+                <li><b>2</b><div><strong>Сохранить offline</strong>Отправляет отдельный POST /v1/downloads и создаёт локальную копию.</div></li>
+                <li><b>3</b><div><strong>Обновить поток</strong>Повторно запрашивает playback contract, если URL истёк или provider его отозвал.</div></li>
+              </ul>
+            </div>
+            <div class="panel" style="margin-top:12px">
+              <div class="toggle-line">
+                <div><strong>Разрешить extractor providers</strong><div class="track-artist">Вы отвечаете за соблюдение правил источников и местного законодательства.</div></div>
+                <button class="switch on" type="button" role="switch" aria-checked="true" aria-label="Разрешить extractor providers"></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="privacy" role="tabpanel" hidden>
+            <div class="panel">
+              <h2>Privacy-first analytics</h2>
+              <div class="toggle-line">
+                <div><strong>Локальный журнал событий</strong><div class="track-artist">Не записывает поисковые запросы, названия треков, API key и stream URL</div></div>
+                <button class="switch" type="button" role="switch" aria-checked="false" aria-label="Локальный журнал событий"></button>
+              </div>
+              <div class="toggle-line">
+                <div><strong>Внешний adapter</strong><div class="track-artist">PostHog или Plausible подключаются только после явного opt-in</div></div>
+                <span class="status">Выключен</span>
+              </div>
+              <div class="toggle-line">
+                <div><strong>Диагностика ошибок</strong><div class="track-artist">Только error code, provider id и latency bucket</div></div>
+                <button class="switch on" type="button" role="switch" aria-checked="true" aria-label="Диагностика ошибок"></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="about" role="tabpanel" hidden>
+            <div class="panel">
+              <h2>Music Orchestrator</h2>
+              <div class="stat-line"><small>Backend</small><strong>Go · http://127.0.0.1:8080</strong></div>
+              <div class="stat-line"><small>Frontend</small><strong>Vite + React + TypeScript</strong></div>
+              <div class="stat-line"><small>OpenAPI</small><strong>/openapi.json</strong></div>
+              <div class="stat-line"><small>Версия</small><strong>—</strong></div>
+              <div class="stat-line"><small>Media root</small><strong>Ожидает backend endpoint</strong></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <aside class="inspector" aria-label="Состояние сервера">
+      <div class="inspector-head"><h2>Сервер</h2></div>
+      <div class="panel">
+        <h3>Backend доступен</h3>
+        <div class="stat-line"><small>Адрес</small><strong>127.0.0.1:8080</strong></div>
+        <div class="stat-line"><small>Ответ</small><strong>24 мс</strong></div>
+        <div class="stat-line"><small>Авторизация</small><strong>X-API-Key</strong></div>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <h3>Хранилище</h3>
+        <p style="margin:0;color:var(--muted)">Данные о <code style="font-family:var(--font-mono)">APP_MEDIA_ROOT</code> появятся после отдельного backend endpoint.</p>
+      </div>
+    </aside>
+
+    <footer class="player" aria-label="Музыкальный player">
+      <div class="player-track"><span class="art lime"></span><div class="player-track-copy"><strong>Demo Synthwave Night</strong><span>Local Artist · local_stream</span></div></div>
+      <div class="player-center">
+        <button class="play js-play" type="button" aria-label="Воспроизвести"><svg><use href="assets/sprite.svg#play"/></svg></button>
+        <div class="progress-wrap"><span>01:18</span><input aria-label="Позиция воспроизведения" type="range" min="0" max="201" value="78"><span>03:21</span></div>
+      </div>
+      <div class="player-side"><span class="provider-badge local">local_stream</span></div>
+    </footer>
+  </div>
+
+  <a class="mobile-player" href="now-playing.html">
+    <span class="art lime"></span>
+    <span class="player-track-copy"><strong>Demo Synthwave Night</strong><span>Local Artist · 01:18</span></span>
+    <button type="button" aria-label="Воспроизвести"><svg><use href="assets/sprite.svg#play"/></svg></button>
+  </a>
+  <nav class="mobile-nav" aria-label="Мобильная навигация">
+    <a href="index.html"><svg><use href="assets/sprite.svg#search"/></svg><span>Поиск</span></a>
+    <a href="library.html"><svg><use href="assets/sprite.svg#library"/></svg><span>Медиатека</span></a>
+    <a href="favorites.html"><svg><use href="assets/sprite.svg#heart"/></svg><span>Любимое</span></a>
+    <a href="downloads.html"><svg><use href="assets/sprite.svg#download"/></svg><span>Задачи</span></a>
+    <a class="active" href="settings.html"><svg><use href="assets/sprite.svg#settings"/></svg><span>Настройки</span></a>
+  </nav>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="assets/app.js"></script>
+  <script>
+    document.getElementById('test-api')?.addEventListener('click',()=>{
+      window.appToast?.('Backend доступен','GET /health · 24 мс');
+    });
+  </script>
+</body>
+</html>

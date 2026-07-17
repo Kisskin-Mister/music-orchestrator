@@ -1,0 +1,4 @@
+@import "tailwindcss";
+
+:root{color-scheme:dark;font-family:"Geist","SF Pro Text",ui-sans-serif,system-ui,sans-serif;background:#0b0c0f;color:#f2f0e9;--accent:#b8f545;--surface:#101217;--border:rgba(255,255,255,.09);--muted:#8c919e}
+*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh;background:#0b0c0f}button,input{font:inherit}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}

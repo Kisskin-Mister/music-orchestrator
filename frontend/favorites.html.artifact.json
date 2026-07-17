@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "favorites.html",
+  "entry": "favorites.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-07-17T16:09:07.545Z",
+  "updatedAt": "2026-07-17T16:09:07.545Z",
+  "metadata": {
+    "inferred": true,
+    "reconciled": true
+  }
+}
