@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+!.env.example
+data
+bin
+music-orchestrator
+music-orchestrator-go
+.DS_Store
+coverage.out

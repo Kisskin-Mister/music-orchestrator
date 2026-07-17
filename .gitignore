@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+data/
+bin/
+music-orchestrator
+music-orchestrator-go
+*.db
+*.sqlite
+.DS_Store
+coverage.out

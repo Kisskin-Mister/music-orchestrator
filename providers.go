@@ -1,0 +1,130 @@
+package main
+
+import (
+	"encoding/base64"
+	"fmt"
+	"net/url"
+	"strings"
+)
+
+type ProviderService struct {
+	cfg       Config
+	extractor *Extractor
+}
+
+func NewProviderService(cfg Config) *ProviderService {
+	return &ProviderService{cfg: cfg, extractor: NewExtractor(cfg)}
+}
+
+func (p *ProviderService) Providers() []Provider {
+	return []Provider{localProvider(), youtubeOfficialProvider(), soundcloudOfficialProvider(), p.extractorProvider("youtube_stream", "YouTube Stream", "youtube"), p.extractorProvider("soundcloud_stream", "SoundCloud Stream", "soundcloud")}
+}
+func (p *ProviderService) byID(id string) (Provider, bool) {
+	for _, pr := range p.Providers() {
+		if pr.ID == id {
+			return pr, true
+		}
+	}
+	return Provider{}, false
+}
+func localCaps() Capabilities {
+	return Capabilities{Search: true, Metadata: true, RawAudioStream: true, PersistentCache: true, OfflinePlayback: true, PublicDeploymentSafe: true}
+}
+func localPolicy() Policy {
+	return Policy{DownloadAllowed: true, CacheAllowed: true, Notes: []string{"Local/demo media is safe to stream and cache."}}
+}
+func localProvider() Provider {
+	return Provider{ID: "local", Name: "Local Demo Library", Kind: "local", Configured: true, Enabled: true, RiskLevel: "compliant", Capabilities: localCaps(), Policy: localPolicy()}
+}
+func youtubeOfficialProvider() Provider {
+	return Provider{ID: "youtube_official", Name: "YouTube Official Embed", Kind: "youtube", Configured: false, Enabled: false, RiskLevel: "constrained", Capabilities: Capabilities{Search: false, Metadata: true, EmbedPlayback: true, PublicDeploymentSafe: true}, Policy: Policy{DownloadAllowed: false, CacheAllowed: false, RequiresAttribution: true, Notes: []string{"Use official embeds/API only."}}}
+}
+func soundcloudOfficialProvider() Provider {
+	return Provider{ID: "soundcloud_official", Name: "SoundCloud Official", Kind: "soundcloud", Configured: false, Enabled: false, RiskLevel: "constrained", Capabilities: Capabilities{Search: false, Metadata: true, EmbedPlayback: true, PublicDeploymentSafe: true}, Policy: Policy{DownloadAllowed: false, CacheAllowed: false, RequiresAttribution: true, Notes: []string{"Official API credentials are optional future work."}}}
+}
+func (p *ProviderService) extractorProvider(id, name, kind string) Provider {
+	return Provider{ID: id, Name: name, Kind: kind, Configured: p.cfg.EnableRiskyExtractors, Enabled: p.cfg.EnableRiskyExtractors, RiskLevel: "risky", Capabilities: Capabilities{Search: p.cfg.EnableRiskyExtractors, Metadata: p.cfg.EnableRiskyExtractors, RawAudioStream: p.cfg.EnableRiskyExtractors, PersistentCache: p.cfg.EnableRiskyExtractors, OfflinePlayback: p.cfg.EnableRiskyExtractors, PublicDeploymentSafe: false}, Policy: Policy{DownloadAllowed: p.cfg.EnableRiskyExtractors, CacheAllowed: p.cfg.EnableRiskyExtractors, RequiresAttribution: true, Notes: []string{"Personal self-hosted mode only. Users are responsible for source terms and law."}}}
+}
+
+func (p *ProviderService) Search(query string, providerIDs []string, limit int) []Track {
+	if len(providerIDs) == 0 {
+		providerIDs = []string{"local"}
+		if p.cfg.EnableRiskyExtractors {
+			providerIDs = append(providerIDs, "youtube_stream", "soundcloud_stream")
+		}
+	}
+	out := []Track{}
+	for _, id := range providerIDs {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		switch id {
+		case "local":
+			out = append(out, localSearch(query)...)
+		case "youtube_stream", "soundcloud_stream":
+			if p.cfg.EnableRiskyExtractors {
+				items, err := p.extractor.Search(id, query, limit)
+				if err == nil {
+					out = append(out, items...)
+				}
+			}
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		return out[:limit]
+	}
+	return out
+}
+func localSearch(query string) []Track {
+	q := strings.ToLower(query)
+	seeds := []Track{localTrack("seed-1", "Demo Song One", "Local Artist", 183), localTrack("seed-2", "Demo Lofi Loop", "Local Artist", 122), localTrack("seed-3", "Demo Synthwave Night", "Local Artist", 201)}
+	if q == "" {
+		return seeds
+	}
+	out := []Track{}
+	for _, t := range seeds {
+		if strings.Contains(strings.ToLower(t.Title+" "+t.Artist), q) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+func localTrack(pid, title, artist string, dur int) Track {
+	return Track{ID: "local:" + pid, ProviderID: "local", ProviderTrackID: pid, Title: title, Artist: artist, DurationSeconds: dur, SourceURL: "/media/demo-" + pid + ".mp3", Attribution: "Local demo", Capabilities: localCaps(), Policy: localPolicy()}
+}
+func (p *ProviderService) Track(trackID string) (Track, bool) {
+	provider, pid, ok := splitTrackID(trackID)
+	if !ok {
+		return Track{}, false
+	}
+	switch provider {
+	case "local":
+		for _, t := range localSearch("") {
+			if t.ProviderTrackID == pid {
+				return t, true
+			}
+		}
+	case "youtube_stream", "soundcloud_stream":
+		if p.cfg.EnableRiskyExtractors {
+			t, err := p.extractor.Resolve(provider, pid)
+			return t, err == nil
+		}
+	}
+	return Track{}, false
+}
+func splitTrackID(id string) (string, string, bool) {
+	a, b, ok := strings.Cut(id, ":")
+	return a, b, ok && a != "" && b != ""
+}
+func ytURL(pid string) string     { return "https://www.youtube.com/watch?v=" + url.QueryEscape(pid) }
+func scIDFromURL(u string) string { return "url_" + base64.RawURLEncoding.EncodeToString([]byte(u)) }
+func scURLFromID(id string) (string, error) {
+	if strings.HasPrefix(id, "url_") {
+		b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, "url_"))
+		return string(b), err
+	}
+	if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
+		return id, nil
+	}
+	return "", fmt.Errorf("soundcloud extractor id must be an encoded URL")
+}
