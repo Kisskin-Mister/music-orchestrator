@@ -5,6 +5,11 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },
+  preview: {
+    host: '0.0.0.0',
+    port: 5173,
+    allowedHosts: ['music.mibombopussiclat.ru', 'localhost', '127.0.0.1'],
+  },
   server: {
     port: 5173,
     allowedHosts: ['music.mibombopussiclat.ru', 'localhost', '127.0.0.1'],

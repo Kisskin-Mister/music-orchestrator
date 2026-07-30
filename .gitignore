@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 data/
+backups/
 bin/
 music-orchestrator
 music-orchestrator-go
