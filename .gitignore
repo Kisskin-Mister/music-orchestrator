@@ -9,3 +9,10 @@ music-orchestrator-go
 *.sqlite
 .DS_Store
 coverage.out
+node_modules/
+dist/
+coverage/
+.vite/
+playwright-report/
+test-results/
+*.tsbuildinfo

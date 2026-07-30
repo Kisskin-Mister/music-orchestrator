@@ -8,6 +8,12 @@ func OpenAPISchema() map[string]any {
 		"paths": map[string]any{
 			"/health":                            map[string]any{"get": op("Health", false)},
 			"/v1/providers":                      map[string]any{"get": op("List providers", false)},
+			"/v1/auth/session":                   map[string]any{"get": op("Get auth/session state", false)},
+			"/v1/auth/register":                  map[string]any{"post": op("First-run owner registration", false)},
+			"/v1/auth/login":                     map[string]any{"post": op("Login with owner password", false)},
+			"/v1/auth/verify":                    map[string]any{"post": op("Verify TOTP code", false)},
+			"/v1/auth/logout":                    map[string]any{"post": op("Logout", false)},
+			"/v1/auth/me":                        map[string]any{"get": op("Current authenticated identity", true)},
 			"/v1/search":                         map[string]any{"get": op("Search tracks", false)},
 			"/v1/tracks/{track_id}":              map[string]any{"get": op("Get track", false)},
 			"/v1/playback/{track_id}":            map[string]any{"get": op("Resolve playback", false)},

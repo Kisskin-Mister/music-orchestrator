@@ -26,6 +26,8 @@ type Config struct {
 	NavidromeBaseURL      string
 	NavidromeUsername     string
 	NavidromeToken        string
+	SessionTTLHours       int
+	SecureCookies         bool
 }
 
 func LoadConfig() Config {
@@ -45,6 +47,8 @@ func LoadConfig() Config {
 		NavidromeBaseURL:      env("APP_NAVIDROME_BASE_URL", ""),
 		NavidromeUsername:     env("APP_NAVIDROME_USERNAME", ""),
 		NavidromeToken:        env("APP_NAVIDROME_TOKEN", ""),
+		SessionTTLHours:       envInt("APP_SESSION_TTL_HOURS", 72),
+		SecureCookies:         envBool("APP_SECURE_COOKIES", false),
 	}
 	cfg.APIKeys = map[string]bool{}
 	for _, key := range strings.Split(env("APP_API_KEYS", "change-me-local-dev-key"), ",") {

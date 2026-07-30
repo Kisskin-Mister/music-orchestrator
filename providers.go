@@ -119,12 +119,21 @@ func splitTrackID(id string) (string, string, bool) {
 func ytURL(pid string) string     { return "https://www.youtube.com/watch?v=" + url.QueryEscape(pid) }
 func scIDFromURL(u string) string { return "url_" + base64.RawURLEncoding.EncodeToString([]byte(u)) }
 func scURLFromID(id string) (string, error) {
+	raw := id
 	if strings.HasPrefix(id, "url_") {
 		b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, "url_"))
-		return string(b), err
+		if err != nil {
+			return "", err
+		}
+		raw = string(b)
 	}
-	if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
-		return id, nil
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" {
+		return "", fmt.Errorf("soundcloud extractor id must be a valid URL")
 	}
-	return "", fmt.Errorf("soundcloud extractor id must be an encoded URL")
+	host := strings.ToLower(u.Hostname())
+	if host != "soundcloud.com" && !strings.HasSuffix(host, ".soundcloud.com") && host != "sndcdn.com" && !strings.HasSuffix(host, ".sndcdn.com") {
+		return "", fmt.Errorf("soundcloud URL host is not allowed")
+	}
+	return u.String(), nil
 }

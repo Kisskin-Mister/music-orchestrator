@@ -23,12 +23,18 @@ type ytdlpInfo struct {
 	ID          string        `json:"id"`
 	Title       string        `json:"title"`
 	Uploader    string        `json:"uploader"`
+	Channel     string        `json:"channel"`
 	Artist      string        `json:"artist"`
+	Album       string        `json:"album"`
+	Track       string        `json:"track"`
+	Categories  []string      `json:"categories"`
 	Duration    float64       `json:"duration"`
 	WebpageURL  string        `json:"webpage_url"`
 	OriginalURL string        `json:"original_url"`
 	Thumbnail   string        `json:"thumbnail"`
 	URL         string        `json:"url"`
+	IEKey       string        `json:"ie_key"`
+	Type        string        `json:"_type"`
 	IsLive      bool          `json:"is_live"`
 	LiveStatus  string        `json:"live_status"`
 	Entries     []ytdlpInfo   `json:"entries"`
@@ -53,14 +59,14 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 		limit = 10
 	}
 	searchLimit := limit
-	if providerID == "youtube_stream" {
-		searchLimit = limit * 4
+	if providerID == "youtube_stream" && searchLimit < 12 {
+		searchLimit = 12
 	}
 	spec := "ytsearch" + fmt.Sprint(searchLimit) + ":" + query
 	if providerID == "soundcloud_stream" {
 		spec = "scsearch" + fmt.Sprint(limit) + ":" + query
 	}
-	info, err := e.dump(spec, e.cfg.ExtractorTimeout)
+	info, err := e.dump(spec, e.cfg.ExtractorTimeout, providerID == "youtube_stream")
 	if err != nil {
 		slog.Warn("yt-dlp search failed", "provider", providerID, "error", err)
 		return nil, err
@@ -68,6 +74,11 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 	entries := info.Entries
 	if len(entries) == 0 {
 		entries = []ytdlpInfo{info}
+	}
+	if providerID == "youtube_stream" {
+		sort.SliceStable(entries, func(i, j int) bool {
+			return youtubeAudioScore(entries[i], query) > youtubeAudioScore(entries[j], query)
+		})
 	}
 	out := []Track{}
 	for _, it := range entries {
@@ -78,7 +89,10 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 			continue
 		}
 		pid := it.ID
-		source := first(it.WebpageURL, it.OriginalURL)
+		source := first(it.WebpageURL, it.OriginalURL, it.URL)
+		if providerID == "youtube_stream" && !isYouTubeSearchVideo(it, pid, source) {
+			continue
+		}
 		if providerID == "soundcloud_stream" {
 			if source == "" {
 				continue
@@ -98,7 +112,7 @@ func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
 	if err != nil {
 		return Track{}, err
 	}
-	info, err := e.dump(u, e.cfg.ExtractorTimeout)
+	info, err := e.dump(u, e.cfg.ExtractorTimeout, false)
 	if err != nil {
 		return Track{}, err
 	}
@@ -110,7 +124,7 @@ func (e *Extractor) StreamURL(providerID, pid string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	info, err := e.dump(u, e.cfg.ExtractorTimeout)
+	info, err := e.dump(u, e.cfg.ExtractorTimeout, false)
 	if err != nil {
 		return "", err
 	}
@@ -141,6 +155,52 @@ func scoreFormat(f ytdlpFormat) float64 {
 		s += 10000
 	}
 	return s
+}
+
+func youtubeAudioScore(it ytdlpInfo, query string) int {
+	score := 0
+	if isYouTubeAudioTopic(it) {
+		score += 1000
+	}
+	if hasCategory(it, "Music") {
+		score += 100
+	}
+	if it.Track != "" {
+		score += 250
+	}
+	if it.Album != "" {
+		score += 80
+	}
+	if strings.Contains(strings.ToLower(first(it.Uploader, it.Channel)), " - topic") {
+		score += 180
+	}
+	if it.Duration > 45 && it.Duration < 600 {
+		score += 50
+	}
+	if strings.Contains(strings.ToLower(it.Title), "official video") || strings.Contains(strings.ToLower(it.Title), "music video") || strings.Contains(strings.ToLower(it.Title), "клип") {
+		score -= 300
+	}
+	q := strings.ToLower(query)
+	if it.Track != "" && strings.Contains(q, strings.ToLower(it.Track)) {
+		score += 120
+	}
+	return score
+}
+
+func isYouTubeAudioTopic(it ytdlpInfo) bool {
+	if it.Track != "" && it.Artist != "" && hasCategory(it, "Music") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(first(it.Uploader, it.Channel)), " - topic")
+}
+
+func hasCategory(it ytdlpInfo, category string) bool {
+	for _, c := range it.Categories {
+		if strings.EqualFold(c, category) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Extractor) Download(providerID, pid, format, mediaRoot string) (string, int64, error) {
@@ -177,10 +237,15 @@ func (e *Extractor) Download(providerID, pid, format, mediaRoot string) (string,
 	return filepath.Base(matches[0]), fi.Size(), nil
 }
 
-func (e *Extractor) dump(spec string, timeoutDur time.Duration) (ytdlpInfo, error) {
+func (e *Extractor) dump(spec string, timeoutDur time.Duration, flatPlaylist bool) (ytdlpInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDur)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, e.cfg.YTDLPBinary, "--socket-timeout", "10", "--dump-single-json", "--skip-download", spec)
+	args := []string{"--no-update", "--retries", "1", "--socket-timeout", "20"}
+	if flatPlaylist {
+		args = append(args, "--flat-playlist")
+	}
+	args = append(args, "--dump-single-json", "--skip-download", spec)
+	cmd := exec.CommandContext(ctx, e.cfg.YTDLPBinary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -210,21 +275,55 @@ func (e *Extractor) dump(spec string, timeoutDur time.Duration) (ytdlpInfo, erro
 	return ytdlpInfo{}, fmt.Errorf("cannot parse yt-dlp JSON")
 }
 
+func isYouTubeSearchVideo(it ytdlpInfo, pid, source string) bool {
+	if it.IEKey != "" && it.IEKey != "Youtube" {
+		return false
+	}
+	if strings.HasPrefix(pid, "UC") || strings.Contains(source, "/channel/") || strings.Contains(source, "/playlist?") {
+		return false
+	}
+	return true
+}
+
 func (e *Extractor) toTrack(providerID, pid string, it ytdlpInfo, source string) Track {
 	pr := e.provider(providerID)
+	artwork := first(it.Thumbnail)
+	if artwork == "" && providerID == "youtube_stream" && isSafeYouTubeVideoID(pid) {
+		artwork = youtubeThumbnailURL(pid)
+	}
 	return Track{
 		ID:              providerID + ":" + pid,
 		ProviderID:      providerID,
 		ProviderTrackID: pid,
-		Title:           first(it.Title, pid),
-		Artist:          first(it.Uploader, it.Artist),
+		Title:           first(it.Track, it.Title, pid),
+		Artist:          first(it.Artist, it.Uploader, it.Channel),
+		Album:           it.Album,
 		DurationSeconds: int(it.Duration),
-		ArtworkURL:      it.Thumbnail,
+		ArtworkURL:      artwork,
 		SourceURL:       source,
 		Attribution:     pr.Name,
+		Official:        isYouTubeAudioTopic(it),
 		Capabilities:    pr.Capabilities,
 		Policy:          pr.Policy,
 	}
+}
+
+func youtubeThumbnailURL(videoID string) string {
+	// hqdefault exists for every normal YouTube video, unlike maxresdefault.
+	return "https://i.ytimg.com/vi/" + videoID + "/hqdefault.jpg"
+}
+
+func isSafeYouTubeVideoID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (e *Extractor) provider(id string) Provider {

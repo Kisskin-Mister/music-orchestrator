@@ -21,7 +21,10 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, ErrorBody{Error: ErrorDetail{Code: fmt.Sprintf("http_%d", status), Message: msg}})
+	writeErrorCode(w, status, fmt.Sprintf("http_%d", status), msg)
+}
+func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, ErrorBody{Error: ErrorDetail{Code: code, Message: msg}})
 }
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
