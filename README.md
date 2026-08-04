@@ -151,6 +151,7 @@ flutter build apk --release
 ### Способ 3. iPhone нативно
 
 Требует Mac с Xcode, а для раздачи другим — аккаунт Apple Developer ($99 в год).
+Пошагово — в [docs/MOBILE-INSTALL.ru.md](docs/MOBILE-INSTALL.ru.md).
 
 **Важная оговорка про офлайн на iPhone.** Настоящее сохранение музыки в память телефона работает только в **нативном** приложении: файл лежит в песочнице приложения и играет вообще без сети. В веб-версии на iPhone этого нет — Safari не даёт надёжно хранить большие файлы, а система может очистить хранилище при нехватке места.
 
@@ -182,7 +183,8 @@ flutter build apk --release
 
 ## Документация
 
-- [docs/INSTALL.ru.md](docs/INSTALL.ru.md) — установка, автозапуск, Docker
+- [docs/INSTALL.ru.md](docs/INSTALL.ru.md) — установка сервера, автозапуск, Docker
+- [docs/MOBILE-INSTALL.ru.md](docs/MOBILE-INSTALL.ru.md) — установка на iPhone через Xcode и на Android
 - [docs/RELEASE.ru.md](docs/RELEASE.ru.md) — подготовка репозитория к релизу
 - [docs/API.ru.md](docs/API.ru.md) — описание API
 - [docs/roadmap.ru.md](docs/roadmap.ru.md) — что планируется дальше

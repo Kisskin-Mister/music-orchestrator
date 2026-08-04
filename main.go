@@ -415,6 +415,19 @@ func (a *App) playback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pb)
 }
 
+// upstreamChunkSize is why this proxy exists at all.
+//
+// googlevideo throttles a single long-lived connection: the first megabyte
+// arrives at full speed and then throughput collapses to near zero, so a track
+// plays for a couple of minutes and goes silent while the seek bar still shows
+// the full length. Requesting the same file as a sequence of byte ranges resets
+// that limit on every request — measured on a 6 MB track, one connection stalled
+// at 850 KB while 2 MB ranges each completed in about a second.
+//
+// 4 MB balances the number of round trips against how much is re-fetched when a
+// listener seeks away mid-chunk.
+const upstreamChunkSize int64 = 4 << 20
+
 func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("track_id")
 	providerID, pid, ok := splitTrackID(id)
@@ -427,39 +440,200 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, err := a.providers.extractor.StreamURL(providerID, pid)
+	target, upstreamHeaders, err := a.providers.extractor.StreamSource(providerID, pid)
 	if err != nil {
 		slog.Warn("stream resolve failed", "track", id, "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "Cannot build upstream stream request")
-		return
-	}
-	for _, name := range []string{"Range", "If-Range", "If-None-Match", "If-Modified-Since"} {
-		if value := r.Header.Get(name); value != "" {
-			upstream.Header.Set(name, value)
-		}
-	}
-	upstream.Header.Set("Accept", "audio/*,*/*;q=0.8")
-	upstream.Header.Set("User-Agent", "MusicOrchestrator/1.0")
 
-	resp, err := http.DefaultClient.Do(upstream)
+	total, contentType, err := a.probeUpstream(r.Context(), target, upstreamHeaders)
 	if err != nil {
-		slog.Warn("stream proxy failed", "track", id, "error", err)
+		slog.Warn("stream probe failed", "track", id, "error", err)
 		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
 		return
 	}
-	defer resp.Body.Close()
-	for _, name := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified", "Cache-Control"} {
-		if value := resp.Header.Get(name); value != "" {
-			w.Header().Set(name, value)
-		}
+
+	start, end, partial, ok := parseRange(r.Header.Get("Range"), total)
+	if !ok {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", total))
+		writeError(w, http.StatusRequestedRangeNotSatisfiable, "Invalid range")
+		return
 	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+
+	if contentType == "" {
+		contentType = "audio/mpeg"
+	}
+	w.Header().Set("Content-Type", contentType)
+	// Accept-Ranges is what lets the client seek at all; without it browsers
+	// treat the stream as a live feed and disable the scrubber.
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+	if partial {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, total))
+		w.WriteHeader(http.StatusPartialContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	if r.Method == http.MethodHead {
+		return
+	}
+
+	flusher, _ := w.(http.Flusher)
+	for offset := start; offset <= end; {
+		chunkEnd := offset + upstreamChunkSize - 1
+		if chunkEnd > end {
+			chunkEnd = end
+		}
+		n, err := a.copyRange(r.Context(), w, target, upstreamHeaders, offset, chunkEnd)
+		if n > 0 && flusher != nil {
+			flusher.Flush()
+		}
+		if err != nil {
+			// The client hanging up mid-track is normal (skip, close), so it is
+			// not worth a warning; anything else means the listener just heard
+			// the audio cut out and we want that in the log.
+			if r.Context().Err() == nil {
+				slog.Warn("stream chunk failed", "track", id, "offset", offset, "error", err)
+			}
+			return
+		}
+		offset += n
+	}
+}
+
+// probeUpstream asks for a single byte to learn the full length from
+// Content-Range, which is the only reliable way to size a CDN response that
+// refuses to answer HEAD.
+func (a *App) probeUpstream(ctx context.Context, target string, headers map[string]string) (int64, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	applyUpstreamHeaders(req, headers)
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusPartialContent {
+		return 0, "", fmt.Errorf("upstream does not support ranges: %s", resp.Status)
+	}
+	_, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+	if !ok || total <= 0 {
+		return 0, "", fmt.Errorf("upstream did not report a size")
+	}
+	return total, resp.Header.Get("Content-Type"), nil
+}
+
+// copyRange fetches one byte range and returns how many bytes reached the client.
+func (a *App) copyRange(ctx context.Context, w io.Writer, target string, headers map[string]string, start, end int64) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return 0, err
+	}
+	applyUpstreamHeaders(req, headers)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("upstream returned %s", resp.Status)
+	}
+	n, err := io.Copy(w, resp.Body)
+	if err != nil {
+		return n, err
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("upstream returned an empty range")
+	}
+	return n, nil
+}
+
+// applyUpstreamHeaders forwards what yt-dlp prescribed for this URL. Overriding
+// the User-Agent with our own is enough to get a 403 from googlevideo.
+func applyUpstreamHeaders(req *http.Request, headers map[string]string) {
+	for name, value := range headers {
+		if strings.EqualFold(name, "Range") || strings.EqualFold(name, "Host") {
+			continue
+		}
+		req.Header.Set(name, value)
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+	}
+}
+
+// parseRange handles the single-range form browsers actually send.
+// A missing header means the whole file.
+func parseRange(header string, total int64) (start, end int64, partial, ok bool) {
+	if header == "" {
+		return 0, total - 1, false, true
+	}
+	spec, found := strings.CutPrefix(strings.TrimSpace(header), "bytes=")
+	if !found || strings.Contains(spec, ",") {
+		return 0, 0, false, false
+	}
+	fromText, toText, found := strings.Cut(spec, "-")
+	if !found {
+		return 0, 0, false, false
+	}
+	switch {
+	case fromText == "":
+		// "bytes=-500": the trailing 500 bytes.
+		length, err := strconv.ParseInt(toText, 10, 64)
+		if err != nil || length <= 0 {
+			return 0, 0, false, false
+		}
+		if length > total {
+			length = total
+		}
+		return total - length, total - 1, true, true
+	default:
+		start, err := strconv.ParseInt(fromText, 10, 64)
+		if err != nil || start < 0 || start >= total {
+			return 0, 0, false, false
+		}
+		end = total - 1
+		if toText != "" {
+			parsed, err := strconv.ParseInt(toText, 10, 64)
+			if err != nil || parsed < start {
+				return 0, 0, false, false
+			}
+			if parsed < end {
+				end = parsed
+			}
+		}
+		return start, end, true, true
+	}
+}
+
+func parseContentRange(header string) (start, end, total int64, ok bool) {
+	spec, found := strings.CutPrefix(strings.TrimSpace(header), "bytes ")
+	if !found {
+		return 0, 0, 0, false
+	}
+	rangePart, totalPart, found := strings.Cut(spec, "/")
+	if !found {
+		return 0, 0, 0, false
+	}
+	total, err := strconv.ParseInt(totalPart, 10, 64)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	fromText, toText, found := strings.Cut(rangePart, "-")
+	if !found {
+		return 0, 0, total, true
+	}
+	start, _ = strconv.ParseInt(fromText, 10, 64)
+	end, _ = strconv.ParseInt(toText, 10, 64)
+	return start, end, total, true
 }
 
 func (a *App) download(w http.ResponseWriter, r *http.Request) {

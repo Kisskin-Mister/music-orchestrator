@@ -20,35 +20,37 @@ type Extractor struct{ cfg Config }
 func NewExtractor(cfg Config) *Extractor { return &Extractor{cfg: cfg} }
 
 type ytdlpInfo struct {
-	ID          string        `json:"id"`
-	Title       string        `json:"title"`
-	Uploader    string        `json:"uploader"`
-	Channel     string        `json:"channel"`
-	Artist      string        `json:"artist"`
-	Album       string        `json:"album"`
-	Track       string        `json:"track"`
-	Categories  []string      `json:"categories"`
-	Duration    float64       `json:"duration"`
-	WebpageURL  string        `json:"webpage_url"`
-	OriginalURL string        `json:"original_url"`
-	Thumbnail   string        `json:"thumbnail"`
-	URL         string        `json:"url"`
-	IEKey       string        `json:"ie_key"`
-	Type        string        `json:"_type"`
-	IsLive      bool          `json:"is_live"`
-	LiveStatus  string        `json:"live_status"`
-	Entries     []ytdlpInfo   `json:"entries"`
-	Formats     []ytdlpFormat `json:"formats"`
+	ID          string            `json:"id"`
+	Title       string            `json:"title"`
+	Uploader    string            `json:"uploader"`
+	Channel     string            `json:"channel"`
+	Artist      string            `json:"artist"`
+	Album       string            `json:"album"`
+	Track       string            `json:"track"`
+	Categories  []string          `json:"categories"`
+	Duration    float64           `json:"duration"`
+	WebpageURL  string            `json:"webpage_url"`
+	OriginalURL string            `json:"original_url"`
+	Thumbnail   string            `json:"thumbnail"`
+	URL         string            `json:"url"`
+	IEKey       string            `json:"ie_key"`
+	Type        string            `json:"_type"`
+	IsLive      bool              `json:"is_live"`
+	LiveStatus  string            `json:"live_status"`
+	Entries     []ytdlpInfo       `json:"entries"`
+	Formats     []ytdlpFormat     `json:"formats"`
+	HTTPHeaders map[string]string `json:"http_headers"`
 }
 
 type ytdlpFormat struct {
-	URL      string  `json:"url"`
-	ACodec   string  `json:"acodec"`
-	VCodec   string  `json:"vcodec"`
-	Ext      string  `json:"ext"`
-	ABR      float64 `json:"abr"`
-	TBR      float64 `json:"tbr"`
-	Protocol string  `json:"protocol"`
+	URL         string            `json:"url"`
+	HTTPHeaders map[string]string `json:"http_headers"`
+	ACodec      string            `json:"acodec"`
+	VCodec      string            `json:"vcodec"`
+	Ext         string            `json:"ext"`
+	ABR         float64           `json:"abr"`
+	TBR         float64           `json:"tbr"`
+	Protocol    string            `json:"protocol"`
 }
 
 func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error) {
@@ -119,31 +121,42 @@ func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
 	return e.toTrack(providerID, choosePID(providerID, pid, info), info, first(info.WebpageURL, info.OriginalURL, u)), nil
 }
 
-func (e *Extractor) StreamURL(providerID, pid string) (string, error) {
+// StreamSource returns the CDN URL plus the headers yt-dlp says that URL
+// expects. The headers matter: googlevideo bindssome responses to the client
+// that negotiated them, so replacing the User-Agent with our own can turn a
+// working link into a 403.
+func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]string, error) {
 	u, err := e.urlFor(providerID, pid)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	info, err := e.dump(u, e.cfg.ExtractorTimeout, false)
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	if info.URL != "" {
+		return info.URL, info.HTTPHeaders, nil
 	}
 	formats := info.Formats
 	sort.SliceStable(formats, func(i, j int) bool { return scoreFormat(formats[i]) > scoreFormat(formats[j]) })
 	for _, f := range formats {
 		if f.URL != "" && f.VCodec == "none" && f.ACodec != "none" {
-			return f.URL, nil
+			return f.URL, headersOr(f.HTTPHeaders, info.HTTPHeaders), nil
 		}
 	}
 	for _, f := range formats {
 		if f.URL != "" && f.ACodec != "none" {
-			return f.URL, nil
+			return f.URL, headersOr(f.HTTPHeaders, info.HTTPHeaders), nil
 		}
 	}
-	if info.URL != "" {
-		return info.URL, nil
+	return "", nil, fmt.Errorf("no playable audio URL")
+}
+
+func headersOr(primary, fallback map[string]string) map[string]string {
+	if len(primary) > 0 {
+		return primary
 	}
-	return "", fmt.Errorf("no playable audio URL")
+	return fallback
 }
 
 func scoreFormat(f ytdlpFormat) float64 {
