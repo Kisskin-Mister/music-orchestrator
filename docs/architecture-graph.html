@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Music Orchestrator — Architecture Graph</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0b0c0f;color:#e8e6df;font:13px/1.5 'SF Pro Text',system-ui,sans-serif;padding:20px}
+h1{font-size:20px;margin-bottom:8px;color:#b8f545}
+h2{font-size:15px;margin:24px 0 8px;color:#b8f545}
+.meta{color:#8c919e;font-size:12px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.card{background:#151821;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px}
+.card h3{font-size:14px;margin-bottom:6px;color:#f0efe8}
+.card .stat{color:#8c919e;font-size:12px}
+.card .stat b{color:#b8f545}
+.cluster-card{border-left:3px solid #b8f545}
+.bug-card{border-left:3px solid #f87171}
+.bug-card h3{color:#fca5a5}
+.fix{color:#86efac;font-size:12px;margin-top:4px}
+svg{width:100%;max-width:900px;margin:20px auto;display:block}
+.node-label{font-size:10px;fill:#c5cad4;font-family:monospace}
+.edge{stroke:rgba(255,255,255,.12);stroke-width:1}
+.edge-strong{stroke:#b8f545;stroke-width:2;opacity:.6}
+.node-go{fill:#61dafb}
+.node-ts{fill:#3178c6}
+.node-dart{fill:#0175C2}
+.node-html{fill:#e34c26}
+.bug-marker{fill:#f87171}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.06)}
+th{color:#b8f545;font-weight:600}
+.tag{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;margin:2px}
+.tag-go{background:#00ADD822;color:#00ADD8;border:1px solid #00ADD844}
+.tag-ts{background:#3178c622;color:#6CB2F6;border:1px solid #3178c644}
+.tag-dart{background:#0175C222;color:#54C5F8;border:1px solid #0175C244}
+.tag-bug{background:#f8717122;color:#fca5a5;border:1px solid #f8717144}
+.tag-fix{background:#b8f54522;color:#b8f545;border:1px solid #b8f54544}
+</style>
+</head>
+<body>
+<h1>🎵 Music Orchestrator — Architecture Graph</h1>
+<p class="meta">1381 nodes · 4299 edges · Go backend + React/TS frontend + Flutter mobile · Generated 2026-08-04</p>
+
+<h2>🏗️ Project Structure</h2>
+<div class="grid">
+  <div class="card"><h3>Go Backend</h3><div class="stat"><b>20</b> files · HTTP API, store, auth, extractors, providers</div></div>
+  <div class="card"><h3>React Frontend</h3><div class="stat"><b>16</b> files · Vite + TS + Tailwind + Zustand + TanStack Query</div></div>
+  <div class="card"><h3>Flutter Mobile</h3><div class="stat"><b>33</b> files · Dart, Android/iOS/macOS/Web targets</div></div>
+  <div class="card"><h3>Tests</h3><div class="stat">Go: <b>8</b> test files · Frontend: <b>3</b> test files</div></div>
+</div>
+
+<h2>🔀 API Routes (15 endpoints)</h2>
+<table>
+<tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+<tr><td>GET</td><td>/health</td><td>Health check</td></tr>
+<tr><td>GET</td><td>/openapi.json</td><td>OpenAPI spec</td></tr>
+<tr><td>GET</td><td>/v1/providers</td><td>List providers</td></tr>
+<tr><td>GET</td><td>/v1/search</td><td>Search tracks</td></tr>
+<tr><td>GET</td><td>/v1/playback/{track_id}</td><td>Resolve stream URL</td></tr>
+<tr><td>POST</td><td>/v1/downloads</td><td>Create download job</td></tr>
+<tr><td>GET/DELETE</td><td>/v1/downloads/{job_id}</td><td>Download management</td></tr>
+<tr><td>GET/POST/DELETE</td><td>/v1/favorites</td><td>Favorites CRUD</td></tr>
+<tr><td>GET/POST</td><td>/v1/playlists</td><td>Playlists CRUD</td></tr>
+<tr><td>POST</td><td>/v1/playlists/{id}/tracks</td><td>Add/remove tracks</td></tr>
+<tr><td>GET/POST/DELETE</td><td>/v1/auth/*</td><td>Auth (login/register/session)</td></tr>
+<tr><td>PATCH</td><td>/v1/account</td><td>Update owner account</td></tr>
+<tr><td>GET/PATCH</td><td>/v1/settings</td><td>Server settings</td></tr>
+<tr><td>GET/POST/PATCH/DELETE</td><td>/v1/users</td><td>User management</td></tr>
+</table>
+
+<h2>🧩 Architecture Clusters</h2>
+<div class="grid">
+  <div class="card cluster-card"><h3>Cluster 10: Frontend UI</h3><div class="stat"><b>89</b> members · Cohesion: 0.92<br>Top: PlayerBar, SearchPage, SettingsView, TrackRow, SearchView</div></div>
+  <div class="card cluster-card"><h3>Cluster 2: Store/Auth</h3><div class="stat"><b>86</b> members · Cohesion: 0.87<br>Top: writeJSON, writeError, userIDFromRequest, saveLocked</div></div>
+  <div class="card cluster-card"><h3>Cluster 4: Mobile API</h3><div class="stat"><b>82</b> members · Cohesion: 0.80<br>Top: track, _uri, _send, _throwIfError, _resolveAndPlay</div></div>
+  <div class="card cluster-card"><h3>Cluster 3: Mobile UI</h3><div class="stat"><b>79</b> members · Cohesion: 0.82<br>Top: AppColors, AppRadius, auth, build</div></div>
+  <div class="card cluster-card"><h3>Cluster 1: Core/App</h3><div class="stat"><b>58</b> members · Cohesion: 0.90<br>Top: ServeHTTP, testApp, NewApp, doJSON</div></div>
+  <div class="card cluster-card"><h3>Cluster 81: Extractors</h3><div class="stat"><b>37</b> members · Cohesion: 0.82<br>Top: toTrack, Search, stream, Resolve, StreamSource</div></div>
+</div>
+
+<h2>🔥 Hotspots (by fan-in)</h2>
+<table>
+<tr><th>Function</th><th>Fan-in</th><th>Language</th></tr>
+<tr><td>writeJSON</td><td>31</td><td><span class="tag tag-go">Go</span></td></tr>
+<tr><td>request (API client)</td><td>31</td><td><span class="tag tag-ts">TS</span></td></tr>
+<tr><td>track</td><td>30</td><td><span class="tag tag-dart">Dart</span></td></tr>
+<tr><td>_uri (ApiClient)</td><td>23</td><td><span class="tag tag-dart">Dart</span></td></tr>
+<tr><td>writeError</td><td>23</td><td><span class="tag tag-go">Go</span></td></tr>
+<tr><td>userIDFromRequest</td><td>19</td><td><span class="tag tag-go">Go</span></td></tr>
+<tr><td>ServeHTTP</td><td>19</td><td><span class="tag tag-go">Go</span></td></tr>
+<tr><td>saveLocked</td><td>15</td><td><span class="tag tag-go">Go</span></td></tr>
+</table>
+
+<h2>🐛 Known Bugs & Architecture Issues</h2>
+<div class="grid">
+  <div class="card bug-card"><h3>1. Search Race Condition</h3><div class="stat">SearchPage.tsx:98-104 — debounce + TanStack Query stale data. Previous in-flight request's response can briefly appear as current results.</div><div class="fix">FIX: AbortController + discard stale responses</div></div>
+  <div class="card bug-card"><h3>2. YouTube 2x Duration</h3><div class="stat">SearchPage.tsx:581 + extractor.go:324 — audio element reports CDN Content-Length-based duration (video+audio container), not audio-only duration.</div><div class="fix">FIX: Prefer yt-dlp duration_seconds over audio.duration</div></div>
+  <div class="card bug-card"><h3>3. iOS Media Session</h3><div class="stat">SearchPage.tsx:552 — artwork missing sizes/type, uses raw external URL instead of /v1/artwork proxy.</div><div class="fix">FIX: Use artworkURL() proxy + sizes:'512x512' + type:'image/jpeg'</div></div>
+  <div class="card bug-card"><h3>4. Playlist: No Add Track UI</h3><div class="stat">SearchPage.tsx:319-373 — PlaylistCard has remove but no add track button.</div><div class="fix">FIX: Add track picker or search integration</div></div>
+  <div class="card bug-card"><h3>5. Desktop Nav Disappears</h3><div class="stat">SearchPage.tsx:133 — lg:static overrides xl:sticky, nav scrolls away between lg and xl.</div><div class="fix">FIX: Change lg:static to lg:sticky lg:top-5</div></div>
+  <div class="card bug-card"><h3>6. SoundCloud Broken</h3><div class="stat">extractor.go:56-110 — scsearch extractor may fail due to API lockdown; empty webpage_url causes all results to be skipped.</div><div class="fix">FIX: Fallback to info.URL when webpage_url empty + check yt-dlp SC status</div></div>
+  <div class="card bug-card"><h3>7. YouTube Slow Loading</h3><div class="stat">providers.go:56-68 — sequential provider search; extractor.go:263 — cold yt-dlp process per request; no stream URL caching.</div><div class="fix">FIX: Parallel providers + cache stream URLs 30-60s</div></div>
+  <div class="card bug-card"><h3>8. No Infinite Scroll</h3><div class="stat">SearchPage.tsx:185 — manual "Ещё 20" button, re-fetches all results from offset 0.</div><div class="fix">FIX: IntersectionObserver + true offset-based pagination</div></div>
+</div>
+
+<h2>📊 Data Flow</h2>
+<svg viewBox="0 0 900 400">
+  <!-- Backend -->
+  <rect x="20" y="20" width="250" height="360" rx="12" fill="#151821" stroke="rgba(255,255,255,.08)"/>
+  <text x="145" y="45" text-anchor="middle" class="node-label" fill="#b8f545" font-size="14">Go Backend (main.go)</text>
+  <rect x="35" y="60" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="80" text-anchor="middle" class="node-label">ServeHTTP → Router</text>
+  <rect x="35" y="100" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="120" text-anchor="middle" class="node-label">Providers (YouTube/SC/Local)</text>
+  <rect x="35" y="140" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="160" text-anchor="middle" class="node-label">Extractor (yt-dlp)</text>
+  <rect x="35" y="180" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="200" text-anchor="middle" class="node-label">Store (JSON file)</text>
+  <rect x="35" y="220" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="240" text-anchor="middle" class="node-label">Auth (sessions + API keys)</text>
+  <rect x="35" y="260" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="280" text-anchor="middle" class="node-label">Stream Proxy (/v1/stream/)</text>
+  <rect x="35" y="300" width="220" height="30" rx="8" fill="#00ADD822" stroke="#00ADD844"/>
+  <text x="145" y="320" text-anchor="middle" class="node-label">Artwork Proxy (/v1/artwork)</text>
+  <rect x="35" y="340" width="220" height="30" rx="8" fill="#f8717122" stroke="#f8717144"/>
+  <text x="145" y="360" text-anchor="middle" class="node-label" fill="#fca5a5">⚠ Sequential search, no caching</text>
+
+  <!-- API arrows -->
+  <line x1="270" y1="135" x2="370" y2="135" class="edge-strong" marker-end="url(#arrow)"/>
+  <line x1="270" y1="175" x2="370" y2="175" class="edge-strong" marker-end="url(#arrow)"/>
+
+  <!-- React Frontend -->
+  <rect x="370" y="20" width="250" height="200" rx="12" fill="#151821" stroke="rgba(255,255,255,.08)"/>
+  <text x="495" y="45" text-anchor="middle" class="node-label" fill="#3178c6" font-size="14">React Frontend</text>
+  <rect x="385" y="60" width="220" height="26" rx="8" fill="#3178c622" stroke="#3178c644"/>
+  <text x="495" y="78" text-anchor="middle" class="node-label">SearchPage + PlayerBar</text>
+  <rect x="385" y="94" width="220" height="26" rx="8" fill="#3178c622" stroke="#3178c644"/>
+  <text x="495" y="112" text-anchor="middle" class="node-label">TanStack Query (useSearch)</text>
+  <rect x="385" y="128" width="220" height="26" rx="8" fill="#3178c622" stroke="#3178c644"/>
+  <text x="495" y="146" text-anchor="middle" class="node-label">Zustand (player store)</text>
+  <rect x="385" y="162" width="220" height="26" rx="8" fill="#f8717122" stroke="#f8717144"/>
+  <text x="495" y="180" text-anchor="middle" class="node-label" fill="#fca5a5">⚠ Race condition, no abort</text>
+
+  <!-- Flutter Mobile -->
+  <rect x="370" y="240" width="250" height="140" rx="12" fill="#151821" stroke="rgba(255,255,255,.08)"/>
+  <text x="495" y="265" text-anchor="middle" class="node-label" fill="#0175C2" font-size="14">Flutter Mobile</text>
+  <rect x="385" y="280" width="220" height="26" rx="8" fill="#0175C222" stroke="#0175C244"/>
+  <text x="495" y="298" text-anchor="middle" class="node-label">ApiClient + PlayerController</text>
+  <rect x="385" y="314" width="220" height="26" rx="8" fill="#0175C222" stroke="#0175C244"/>
+  <text x="495" y="332" text-anchor="middle" class="node-label">OfflineController + LibraryController</text>
+  <rect x="385" y="348" width="220" height="26" rx="8" fill="#0175C222" stroke="#0175C244"/>
+  <text x="495" y="366" text-anchor="middle" class="node-label">MiniPlayer + NowPlayingSheet</text>
+
+  <!-- Traefik -->
+  <rect x="700" y="100" width="170" height="120" rx="12" fill="#151821" stroke="rgba(255,255,255,.08)"/>
+  <text x="785" y="125" text-anchor="middle" class="node-label" fill="#b8f545" font-size="12">Traefik</text>
+  <rect x="710" y="140" width="150" height="24" rx="6" fill="#b8f54522" stroke="#b8f54544"/>
+  <text x="785" y="157" text-anchor="middle" class="node-label">API → :18080</text>
+  <rect x="710" y="170" width="150" height="24" rx="6" fill="#b8f54522" stroke="#b8f54544"/>
+  <text x="785" y="187" text-anchor="middle" class="node-label">Mobile UA → :5174</text>
+  <rect x="710" y="200" width="150" height="24" rx="6" fill="#b8f54522" stroke="#b8f54544"/>
+  <text x="785" y="217" text-anchor="middle" class="node-label">Desktop → :5173</text>
+
+  <line x1="620" y1="135" x2="700" y2="150" class="edge" marker-end="url(#arrow)"/>
+  <line x1="620" y1="300" x2="700" y2="185" class="edge" marker-end="url(#arrow)"/>
+
+  <defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="none" stroke="#b8f545" stroke-width="1.5"/></marker></defs>
+</svg>
+
+<h2>📦 Languages</h2>
+<div class="grid">
+  <div class="card"><h3>Dart</h3><div class="stat"><b>33</b> files — Flutter mobile app</div></div>
+  <div class="card"><h3>Go</h3><div class="stat"><b>20</b> files — Backend API + tests</div></div>
+  <div class="card"><h3>TypeScript</h3><div class="stat"><b>16</b> files — React frontend</div></div>
+  <div class="card"><h3>HTML</h3><div class="stat"><b>9</b> files — Index + docs</div></div>
+  <div class="card"><h3>Swift</h3><div class="stat"><b>7</b> files — iOS/macOS native</div></div>
+  <div class="card"><h3>CSS/Python/Kotlin</h3><div class="stat"><b>4</b> files — Styles + tools</div></div>
+</div>
+
+</body>
+</html>
