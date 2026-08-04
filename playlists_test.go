@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -158,5 +162,52 @@ func TestPlaylistDeleteFlow(t *testing.T) {
 	}
 	if _, ok := st.GetPlaylist(apiKeyUserID("test-key"), p.ID); ok {
 		t.Fatal("playlist must be gone from the persisted store")
+	}
+}
+
+func TestPlaylistAutomaticAndUploadedCover(t *testing.T) {
+	app := testApp(t, true)
+	p := createTestPlaylist(t, app, "test-key", "Cover Mix")
+
+	r := playlistRequest(t, app, "POST", "/v1/playlists/"+p.ID+"/tracks", `{"track_id":"youtube_stream:yt1"}`, "test-key")
+	if r.Code != http.StatusCreated {
+		t.Fatalf("add track %d: %s", r.Code, r.Body.String())
+	}
+	p = readPlaylist(t, r)
+	if p.CoverURL != "https://i.ytimg.com/vi/yt1/hqdefault.jpg" {
+		t.Fatalf("first track artwork must become the automatic cover, got %q", p.CoverURL)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("cover", "cover.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("\x89PNG\r\n\x1a\n"))
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/playlists/"+p.ID+"/cover", &body)
+	req.Header.Set("X-API-Key", "test-key")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	r = httptest.NewRecorder()
+	app.ServeHTTP(r, req)
+	if r.Code != http.StatusOK {
+		t.Fatalf("upload cover %d: %s", r.Code, r.Body.String())
+	}
+	p = readPlaylist(t, r)
+	if len(p.CoverURL) < len("/media/") || p.CoverURL[:len("/media/")] != "/media/" {
+		t.Fatalf("uploaded cover URL missing: %#v", p)
+	}
+	if _, err := os.Stat(filepath.Join(app.cfg.MediaRoot, filepath.Base(p.CoverURL))); err != nil {
+		t.Fatalf("uploaded cover not persisted: %v", err)
+	}
+
+	r = playlistRequest(t, app, http.MethodGet, "/v1/playlists/"+p.ID, "", "test-key")
+	if r.Code != http.StatusOK {
+		t.Fatalf("get playlist after cover upload %d: %s", r.Code, r.Body.String())
+	}
+	reloaded := readPlaylist(t, r)
+	if reloaded.CoverURL != p.CoverURL {
+		t.Fatalf("uploaded cover must win over automatic artwork after reload: got %q want %q", reloaded.CoverURL, p.CoverURL)
 	}
 }

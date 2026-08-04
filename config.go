@@ -16,6 +16,7 @@ type Config struct {
 	CORSOrigins           []string
 	StorePath             string
 	MediaRoot             string
+	WebRoot               string
 	PublicMediaBaseURL    string
 	EnableRiskyExtractors bool
 	YTDLPBinary           string
@@ -37,6 +38,7 @@ func LoadConfig() Config {
 		Environment:           env("APP_ENVIRONMENT", "local"),
 		StorePath:             env("APP_STORE_PATH", "./data/store.json"),
 		MediaRoot:             env("APP_MEDIA_ROOT", "./data/media"),
+		WebRoot:               env("APP_WEB_ROOT", "./mobile/build/web"),
 		PublicMediaBaseURL:    strings.TrimRight(env("APP_PUBLIC_MEDIA_BASE_URL", ""), "/"),
 		EnableRiskyExtractors: envBool("APP_ENABLE_RISKY_EXTRACTORS", false),
 		YTDLPBinary:           env("APP_YT_DLP_BINARY", "yt-dlp"),

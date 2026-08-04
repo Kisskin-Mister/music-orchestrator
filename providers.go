@@ -17,7 +17,7 @@ func NewProviderService(cfg Config) *ProviderService {
 }
 
 func (p *ProviderService) Providers() []Provider {
-	return []Provider{localProvider(), youtubeOfficialProvider(), soundcloudOfficialProvider(), p.extractorProvider("youtube_stream", "YouTube Stream", "youtube"), p.extractorProvider("soundcloud_stream", "SoundCloud Stream", "soundcloud")}
+	return []Provider{youtubeOfficialProvider(), soundcloudOfficialProvider(), p.extractorProvider("youtube_stream", "YouTube Stream", "youtube"), p.extractorProvider("soundcloud_stream", "SoundCloud Stream", "soundcloud")}
 }
 func (p *ProviderService) byID(id string) (Provider, bool) {
 	for _, pr := range p.Providers() {
@@ -48,9 +48,8 @@ func (p *ProviderService) extractorProvider(id, name, kind string) Provider {
 
 func (p *ProviderService) Search(query string, providerIDs []string, limit int) []Track {
 	if len(providerIDs) == 0 {
-		providerIDs = []string{"local"}
 		if p.cfg.EnableRiskyExtractors {
-			providerIDs = append(providerIDs, "youtube_stream", "soundcloud_stream")
+			providerIDs = []string{"youtube_stream", "soundcloud_stream"}
 		}
 	}
 	out := []Track{}
@@ -59,8 +58,6 @@ func (p *ProviderService) Search(query string, providerIDs []string, limit int) 
 			break
 		}
 		switch id {
-		case "local":
-			out = append(out, localSearch(query)...)
 		case "youtube_stream", "soundcloud_stream":
 			if p.cfg.EnableRiskyExtractors {
 				items, err := p.extractor.Search(id, query, limit)

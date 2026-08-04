@@ -1,4 +1,4 @@
-import type { APIError, Favorite, Job, Playback, Playlist, Provider, SearchResponse, SessionInfo, User } from './types';
+import type { APIError, Favorite, Job, Playback, Playlist, Provider, SearchResponse, SessionInfo, User, ServerSettings, ServerSettingsPatch } from './types';
 
 const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -17,6 +17,14 @@ export function setBackendBaseURL(value: string) {
 }
 
 export function getDefaultBackendBaseURL() { return ENV_BASE_URL; }
+
+/** Route cover art through the backend (see artwork.go): works on networks where
+ *  the CDN is unreachable, and keeps the user's IP off third-party hosts. */
+export function artworkURL(raw?: string | null) {
+  if (!raw) return undefined;
+  if (raw.startsWith('/')) return `${getBackendBaseURL()}${raw}`;
+  return `${getBackendBaseURL()}/v1/artwork?url=${encodeURIComponent(raw)}`;
+}
 const DEFAULT_TIMEOUT_MS = 12_000;
 const SEARCH_TIMEOUT_MS = 45_000;
 
@@ -63,6 +71,8 @@ export const api = {
   verify:(code:string)=>request<SessionInfo>('/v1/auth/verify',{method:'POST',body:JSON.stringify({code})}),
   logout:()=>request<void>('/v1/auth/logout',{method:'POST'}),
   updateAccount:(patch:{username:string;password?:string;totp_secret?:string})=>request<SessionInfo>('/v1/account',{method:'PATCH',body:JSON.stringify(patch)},true),
+  settings:()=>request<ServerSettings>('/v1/settings',{},true),
+  updateSettings:(patch:ServerSettingsPatch)=>request<ServerSettings>('/v1/settings',{method:'PATCH',body:JSON.stringify(patch)},true),
   users:()=>request<User[]>('/v1/users',{},true),
   createUser:(username:string,password:string)=>request<User>('/v1/users',{method:'POST',body:JSON.stringify({username,password})},true),
   updateUser:(userId:string,patch:{username?:string;password?:string})=>request<User>(`/v1/users/${encodeURIComponent(userId)}`,{method:'PATCH',body:JSON.stringify(patch)},true),

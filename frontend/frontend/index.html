@@ -1,1 +1,27 @@
-<!doctype html><html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0c0f"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%230b0c0f'/%3E%3Cpath d='M18 39c8-14 20 14 28 0' stroke='%23b8f545' stroke-width='6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"><title>Music Orchestrator</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Music Orchestrator</title>
+
+  <!-- Иконки. apple-touch-icon обязателен: Safari берёт именно его, когда
+       страницу добавляют на экран «Домой», и без него iOS рисует скриншот. -->
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/icon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+
+  <!-- Цвет строки состояния под тёмный интерфейс приложения. -->
+  <meta name="theme-color" content="#08090C">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Orchestrator">
+  <meta name="description" content="Личная self-hosted музыкальная медиатека: поиск, воспроизведение и офлайн.">
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

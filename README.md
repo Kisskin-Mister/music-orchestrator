@@ -1,199 +1,213 @@
 # Music Orchestrator
 
-Go self-hosted music backend for search, playback contracts, local media downloads, favorites, playlists, jobs and frontend integration.
+Личный музыкальный сервис, который вы держите у себя. Ищет треки на YouTube и SoundCloud, играет их, сохраняет на сервер и на телефон — чтобы слушать без интернета.
 
-This repository is intentionally Go-first from the first public commit: one binary, no Python runtime, no hidden credentials, no committed `.env`.
+Никаких подписок, рекламы и чужих серверов: всё крутится на вашей машине, данные лежат у вас.
 
-## Status
+---
 
-Backend MVP v1 is ready for frontend work:
+## Зачем это нужно
 
-- Go `net/http` API.
-- No runtime Go dependencies outside stdlib.
-- JSON file store by default: `APP_STORE_PATH=./data/store.json`.
-- Local/demo provider for safe contract tests.
-- Optional YouTube/SoundCloud self-hosted extractor mode through `yt-dlp`.
-- Playback resolver returns `local_stream`, `embed`, `extractor_stream` or `unavailable`.
-- Download endpoint saves media under `APP_MEDIA_ROOT` and serves it via `/media/{filename}`.
-- OpenAPI JSON is available at `/openapi.json`.
-- Tests cover health, providers, search, playback, downloads, media, auth, favorites, playlists.
+Стриминги удобны, пока не начинаются неудобства: трек пропал из каталога, нужной записи просто нет, за офлайн просят денег, а плейлист живёт на чужом сервере и может исчезнуть вместе с аккаунтом.
 
-## Safety model
+Music Orchestrator работает иначе. Он не хранит каталог — он **находит** музыку там, где она уже есть, и даёт вам её сохранить. Скачанный трек лежит обычным файлом: на вашем сервере и, если захотите, в памяти телефона. Он никуда не денется.
 
-Public-safe mode is the default:
+Подойдёт, если вы:
 
-```env
-APP_ENABLE_RISKY_EXTRACTORS=false
+- держите домашний сервер, NAS или Raspberry Pi и любите, когда всё своё;
+- хотите слушать музыку в самолёте, метро или деревне без сети;
+- собираете коллекцию, которая не зависит от чужих решений.
+
+**Важно и честно:** это инструмент для личного использования. Вы сами отвечаете за то, что скачиваете, и за соблюдение правил источников и законов своей страны. Не разворачивайте это как публичный сервис для посторонних.
+
+---
+
+## Как это устроено
+
+Три части, которые работают вместе:
+
+```
+    ┌──────────────┐        ┌──────────────┐
+    │   Браузер    │        │   Телефон    │
+    │ (React, ПК)  │        │  (Flutter)   │
+    └──────┬───────┘        └──────┬───────┘
+           │                       │
+           └───────────┬───────────┘
+                       │  HTTP API
+                ┌──────▼───────┐
+                │  Сервер (Go) │
+                │  один бинарь │
+                └──────┬───────┘
+                       │
+              ┌────────┴────────┐
+              │                 │
+        ┌─────▼─────┐    ┌──────▼──────┐
+        │  yt-dlp   │    │ Ваши файлы  │
+        │  ffmpeg   │    │  data/media │
+        └───────────┘    └─────────────┘
 ```
 
-YouTube/SoundCloud stream/download mode is explicit opt-in for personal self-hosted use:
+**Сервер на Go** — одна программа, которой не нужны ни база данных, ни Python. Держит аккаунты, избранное, плейлисты и скачанные файлы. Данные лежат в обычном JSON-файле, музыка — обычными mp3 в папке. Захотите переехать — просто скопируйте папку.
 
-```env
-APP_ENABLE_RISKY_EXTRACTORS=true
-APP_YT_DLP_BINARY=yt-dlp
-```
+**yt-dlp и ffmpeg** — внешние утилиты, которые умеют находить и скачивать. Сервер их вызывает, сам ничего не парсит.
 
-`yt-dlp` and `ffmpeg` are external tools. Users are responsible for source terms and local law. Do not run extractor mode as public SaaS.
+**Клиенты** — веб-версия для компьютера и приложение для телефона. Оба говорят с сервером по одному API, поэтому избранное и плейлисты везде одинаковые.
 
-## Requirements
+### Три места, где может лежать трек
 
-For safe local/demo backend:
+Это главное, что стоит понять — от этого зависит, заиграет ли музыка без интернета:
+
+| Где | Что нужно, чтобы слушать | Когда появляется |
+|---|---|---|
+| **Только в источнике** | Интернет и доступ к YouTube/SoundCloud | Сразу после поиска |
+| **На сервере** | Доступ к вашему серверу | Кнопка «Скачать» — сервер забирает файл себе |
+| **На телефоне** | Ничего. Работает в самолёте | Кнопка «Сохранить на устройство» |
+
+Плеер сам выбирает лучший вариант: сначала ищет файл на телефоне, потом на сервере, и только потом лезет в интернет.
+
+Одно ограничение, о котором лучше знать заранее: **скачать трек в первый раз можно, только когда телефон видит сервер.** Слушать потом — где угодно. Как сделать сервер доступным из любой точки — в разделе [Доступ к серверу извне](#доступ-к-серверу-извне).
+
+---
+
+## Что умеет
+
+**Поиск и прослушивание**
+- Поиск по YouTube и SoundCloud с фильтром по источнику
+- Плеер с очередью, перемешиванием и тремя режимами повтора
+- Управление с экрана блокировки и с наушников
+
+**Своя коллекция**
+- Лайки и медиатека
+- Плейлисты со своими обложками
+- «Слушай снова» — то, что включали недавно
+
+**Офлайн**
+- Скачивание на сервер: трек больше не зависит от YouTube
+- Сохранение в память телефона: играет вообще без сети
+- Отдельные вкладки «На устройстве» и «На сервере» — видно, что где лежит и сколько занимает
+- Медиатека кэшируется: список не пустеет, когда сервера нет рядом
+
+**Настройка**
+- Свой акцентный цвет интерфейса
+- Несколько пользователей с разделением прав
+- Настройки сервера прямо из интерфейса — без правки файлов и перезапуска
+
+---
+
+## Быстрый старт
+
+Нужен [Go 1.22+](https://go.dev/dl/). Для YouTube и SoundCloud — ещё `yt-dlp` и `ffmpeg`.
 
 ```bash
-go >= 1.22
+git clone https://github.com/Kisskin-Mister/music-orchestrator.git
+cd music-orchestrator
+cp .env.example .env
+go run .
 ```
 
-For YouTube/SoundCloud stream/download:
+Откройте `http://127.0.0.1:8080`. При первом запуске вас попросят создать аккаунт — он станет администратором.
+
+По умолчанию внешние источники выключены. Чтобы включить YouTube и SoundCloud, поставьте утилиты:
 
 ```bash
-yt-dlp
-ffmpeg
-```
+# macOS
+brew install yt-dlp ffmpeg
 
-Install on Ubuntu/Raspberry Pi:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y golang-go ffmpeg
+# Ubuntu / Raspberry Pi
+sudo apt-get update && sudo apt-get install -y ffmpeg
 python3 -m pip install -U yt-dlp
 ```
 
-## Quick start
+Затем в приложении: **Настройки → Настройки сервера → Источники YouTube и SoundCloud**. Перезапускать ничего не нужно.
+
+Подробная установка, автозапуск и Docker — в [docs/INSTALL.ru.md](docs/INSTALL.ru.md).
+
+---
+
+## Как поставить на телефон
+
+Коротко: **проще всего — как веб-приложение. Магазины не нужны.**
+
+### Способ 1. Веб-приложение (рекомендуется)
+
+Сервер сам раздаёт мобильный интерфейс. Откройте адрес сервера на телефоне и добавьте на домашний экран:
+
+- **iPhone:** Safari → «Поделиться» → «На экран Домой»
+- **Android:** Chrome → меню → «Установить приложение»
+
+Появится обычная иконка, приложение откроется на весь экран без адресной строки. Обновления прилетают сами — вы просто обновляете сервер.
+
+### Способ 2. Приложение для Android
+
+Соберите APK и раздайте файлом:
 
 ```bash
-cp .env.example .env
-go test ./...
-go run .
+cd mobile
+flutter build apk --release
 ```
 
-Health:
+Готовый файл — `mobile/build/app/outputs/flutter-apk/app-release.apk`. Его удобно приложить к релизу на GitHub, чтобы люди скачивали напрямую.
+
+### Способ 3. iPhone нативно
+
+Требует Mac с Xcode, а для раздачи другим — аккаунт Apple Developer ($99 в год).
+
+**Важная оговорка про офлайн на iPhone.** Настоящее сохранение музыки в память телефона работает только в **нативном** приложении: файл лежит в песочнице приложения и играет вообще без сети. В веб-версии на iPhone этого нет — Safari не даёт надёжно хранить большие файлы, а система может очистить хранилище при нехватке места.
+
+Поэтому:
+
+- если офлайн **не критичен** — веб-версии достаточно, ставить ничего не нужно;
+- если офлайн **нужен на iPhone** — соберите нативное приложение в Xcode (бесплатно, но подпись нужно обновлять раз в 7 дней) либо оформите Apple Developer и раздайте через TestFlight;
+- на **Android** ограничения нет: APK умеет полноценный офлайн.
+
+**Почему не App Store и не Google Play.** Приложения, которые скачивают музыку с YouTube, нарушают правила обеих площадок и почти наверняка не пройдут проверку. Это не техническое ограничение, а политика магазинов. Self-hosted проекты вроде этого распространяются иначе — и это рабочий, обычный путь.
+
+Разбор всех вариантов раздачи — в [docs/RELEASE.ru.md](docs/RELEASE.ru.md).
+
+---
+
+## Доступ к серверу извне
+
+Если сервер стоит дома, а телефон в городе, он до сервера не достучится — ни скачать, ни найти.
+
+| Решение | Плюсы | Минусы |
+|---|---|---|
+| **Tailscale** (советую) | Ставится за 10 минут, ничего не надо менять в коде, трафик шифруется, порты наружу не открываются | Нужно поставить клиент на телефон |
+| **Cloudflare Tunnel** | Публичный HTTPS-адрес без белого IP и проброса портов | Трафик идёт через Cloudflare |
+| **Проброс порта + HTTPS** | Полный контроль | Сервер открыт в интернет: нужен TLS и крепкие пароли |
+
+Пока сервера нет рядом, приложение честно об этом скажет и покажет то, что уже скачано на устройство.
+
+---
+
+## Документация
+
+- [docs/INSTALL.ru.md](docs/INSTALL.ru.md) — установка, автозапуск, Docker
+- [docs/RELEASE.ru.md](docs/RELEASE.ru.md) — подготовка репозитория к релизу
+- [docs/API.ru.md](docs/API.ru.md) — описание API
+- [docs/roadmap.ru.md](docs/roadmap.ru.md) — что планируется дальше
+- [SECURITY.md](SECURITY.md) — как сообщить об уязвимости
+
+---
+
+## Разработка
 
 ```bash
-curl http://127.0.0.1:8080/health
+go test ./...                       # сервер
+cd frontend/frontend && npm test    # веб
+cd mobile && flutter test           # мобильное приложение
 ```
 
-Search local demo:
+Веб для разработки — `cd frontend/frontend && npm run dev` (порт 5173), мобильное — `cd mobile && flutter run`.
+
+После изменений в мобильном приложении пересоберите веб-сборку, которую раздаёт сервер:
 
 ```bash
-curl 'http://127.0.0.1:8080/v1/search?q=demo'
+cd mobile && flutter build web --release
 ```
 
-Enable YouTube/SoundCloud extractor mode in `.env` or shell:
+---
 
-```bash
-export APP_ENABLE_RISKY_EXTRACTORS=true
-export APP_YT_DLP_BINARY=yt-dlp
-go run .
-```
+## Лицензия
 
-Search external providers:
-
-```bash
-curl 'http://127.0.0.1:8080/v1/search?q=lofi&providers=youtube_stream,soundcloud_stream&limit=5'
-```
-
-Resolve playback stream URL:
-
-```bash
-curl 'http://127.0.0.1:8080/v1/playback/youtube_stream:VIDEO_ID'
-```
-
-Download audio:
-
-```bash
-curl -X POST http://127.0.0.1:8080/v1/downloads \
-  -H 'X-API-Key: change-me-local-dev-key' \
-  -H 'Content-Type: application/json' \
-  -d '{"track_id":"youtube_stream:VIDEO_ID","format":"mp3"}'
-```
-
-## Configuration
-
-See `.env.example`.
-
-Important variables:
-
-- `APP_ADDR=:8080`
-- `APP_API_KEYS=change-me-local-dev-key`
-- `APP_STORE_PATH=./data/store.json`
-- `APP_MEDIA_ROOT=./data/media`
-- `APP_PUBLIC_MEDIA_BASE_URL=`
-- `APP_ENABLE_RISKY_EXTRACTORS=false`
-- `APP_YT_DLP_BINARY=yt-dlp`
-- `APP_EXTRACTOR_TIMEOUT_SECONDS=30`
-- `APP_DOWNLOAD_TIMEOUT_SECONDS=600`
-
-Optional future integrations:
-
-- `APP_YOUTUBE_API_KEY`
-- `APP_SOUNDCLOUD_CLIENT_ID`
-- `APP_NAVIDROME_BASE_URL`
-- `APP_NAVIDROME_USERNAME`
-- `APP_NAVIDROME_TOKEN`
-
-## API contract
-
-Machine-readable:
-
-```http
-GET /openapi.json
-```
-
-Human docs:
-
-- `docs/API.ru.md`
-- `docs/API.en.md`
-- `docs/FRONTEND-CONTRACT.md`
-
-Core endpoints:
-
-```text
-GET  /health
-GET  /openapi.json
-GET  /v1/providers
-GET  /v1/search
-GET  /v1/tracks/{track_id}
-GET  /v1/playback/{track_id}
-POST /v1/downloads
-GET  /media/{filename}
-GET  /v1/favorites
-POST /v1/favorites
-DELETE /v1/favorites/{track_id}
-GET  /v1/playlists
-POST /v1/playlists
-GET  /v1/playlists/{playlist_id}
-POST /v1/playlists/{playlist_id}/tracks
-GET  /v1/jobs
-GET  /v1/jobs/{job_id}
-```
-
-## Recommended frontend stack
-
-- Vite + React + TypeScript
-- TanStack Query
-- Zustand for player/queue state
-- Tailwind CSS + shadcn/ui
-- native `<audio>` first; Howler.js later if crossfade/advanced queue is needed
-- OpenAPI TypeScript client generated from `/openapi.json`
-- Playwright for smoke tests
-
-## Docker
-
-```bash
-docker build -t music-orchestrator:local .
-docker run --rm -p 8080:8080 \
-  -e APP_ADDR=:8080 \
-  -e APP_API_KEYS=change-me-local-dev-key \
-  -v "$PWD/data:/app/data" \
-  music-orchestrator:local
-```
-
-Extractor mode in Docker requires `yt-dlp` and `ffmpeg`; the provided Dockerfile installs both.
-
-## Development checks
-
-```bash
-gofmt -w .
-go test ./...
-go run .
-```
+[MIT](LICENSE).

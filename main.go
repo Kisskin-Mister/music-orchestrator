@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,7 +20,11 @@ type contextKey string
 const userIDContextKey contextKey = "user_id"
 
 type App struct {
-	cfg       Config
+	cfg Config
+	// baseCfg is the env-derived config. Stored overrides are re-applied on top
+	// of it, so clearing an override restores the .env value rather than
+	// whatever happened to be active.
+	baseCfg   Config
 	store     *Store
 	providers *ProviderService
 	sessions  *sessionStore
@@ -34,7 +39,8 @@ func NewApp(cfg Config) (*App, error) {
 	if err := os.MkdirAll(cfg.MediaRoot, 0755); err != nil {
 		return nil, err
 	}
-	a := &App{cfg: cfg, store: st, providers: NewProviderService(cfg), sessions: newSessionStore(), mux: http.NewServeMux()}
+	effective := st.StoredSettings().apply(cfg)
+	a := &App{cfg: effective, baseCfg: cfg, store: st, providers: NewProviderService(effective), sessions: newSessionStore(), mux: http.NewServeMux()}
 	a.routes()
 	return a, nil
 }
@@ -54,6 +60,8 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /v1/auth/logout", a.authLogout)
 	a.mux.HandleFunc("GET /v1/auth/me", a.auth(a.authMe))
 	a.mux.HandleFunc("PATCH /v1/account", a.auth(a.updateAccount))
+	a.mux.HandleFunc("GET /v1/settings", a.auth(a.getSettings))
+	a.mux.HandleFunc("PATCH /v1/settings", a.auth(a.updateSettings))
 	a.mux.HandleFunc("GET /v1/users", a.auth(a.listUsers))
 	a.mux.HandleFunc("POST /v1/users", a.auth(a.createUser))
 	a.mux.HandleFunc("PATCH /v1/users/{user_id}", a.auth(a.updateUser))
@@ -61,10 +69,12 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /v1/search", a.search)
 	a.mux.HandleFunc("GET /v1/tracks/{track_id}", a.track)
 	a.mux.HandleFunc("GET /v1/playback/{track_id}", a.playback)
+	a.mux.HandleFunc("GET /v1/stream/{track_id}", a.stream)
 	a.mux.HandleFunc("GET /v1/downloads", a.auth(a.listDownloads))
 	a.mux.HandleFunc("POST /v1/downloads", a.auth(a.download))
 	a.mux.HandleFunc("DELETE /v1/downloads/{track_id}", a.auth(a.deleteDownload))
 	a.mux.HandleFunc("GET /media/{filename}", a.media)
+	a.mux.HandleFunc("GET /v1/artwork", a.artwork)
 	a.mux.HandleFunc("POST /v1/favorites", a.auth(a.addFavorite))
 	a.mux.HandleFunc("GET /v1/favorites", a.auth(a.listFavorites))
 	a.mux.HandleFunc("DELETE /v1/favorites/{track_id}", a.auth(a.deleteFavorite))
@@ -72,11 +82,13 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /v1/playlists", a.auth(a.listPlaylists))
 	a.mux.HandleFunc("GET /v1/playlists/{playlist_id}", a.auth(a.getPlaylist))
 	a.mux.HandleFunc("PATCH /v1/playlists/{playlist_id}", a.auth(a.updatePlaylist))
+	a.mux.HandleFunc("POST /v1/playlists/{playlist_id}/cover", a.auth(a.uploadPlaylistCover))
 	a.mux.HandleFunc("DELETE /v1/playlists/{playlist_id}", a.auth(a.deletePlaylist))
 	a.mux.HandleFunc("POST /v1/playlists/{playlist_id}/tracks", a.auth(a.addPlaylistTrack))
 	a.mux.HandleFunc("DELETE /v1/playlists/{playlist_id}/tracks/{track_id}", a.auth(a.removePlaylistTrack))
 	a.mux.HandleFunc("GET /v1/jobs", a.auth(a.listJobs))
 	a.mux.HandleFunc("GET /v1/jobs/{job_id}", a.auth(a.getJob))
+	a.mux.HandleFunc("GET /", a.web)
 }
 
 func (a *App) withCORS(next http.Handler) http.Handler {
@@ -126,11 +138,10 @@ func userIDFromRequest(r *http.Request) string {
 }
 
 func (a *App) optionalUserIDFromRequest(r *http.Request) string {
-	key := r.Header.Get("X-API-Key")
-	if key == "" || !a.cfg.APIKeys[key] {
-		return "anonymous"
+	if userID, _, ok := a.currentIdentity(r); ok {
+		return userID
 	}
-	return apiKeyUserID(key)
+	return "anonymous"
 }
 
 func publicFavorite(f Favorite) Favorite { f.OwnerID = ""; return f }
@@ -393,18 +404,62 @@ func (a *App) playback(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, pb)
 			return
 		}
-		stream, err := a.providers.extractor.StreamURL(providerID, pid)
-		if err != nil {
-			slog.Warn("stream resolve failed", "track", id, "error", err)
-			writeError(w, http.StatusBadGateway, err.Error())
-			return
-		}
+		// Devices play through this backend instead of opening a short-lived CDN
+		// URL directly. Besides respecting the host's proxy settings, this lets us
+		// choose an iOS-compatible M4A/AAC format in one place.
+		stream := "/v1/stream/" + id
 		pb.PlaybackType = "extractor_stream"
 		pb.StreamURL = &stream
-		pb.ExpiresInSeconds = intPtr(21600)
 		pb.Attribution = pr.Name
 	}
 	writeJSON(w, http.StatusOK, pb)
+}
+
+func (a *App) stream(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("track_id")
+	providerID, pid, ok := splitTrackID(id)
+	if !ok || (providerID != "youtube_stream" && providerID != "soundcloud_stream") {
+		writeError(w, http.StatusBadRequest, "Invalid extractor track id")
+		return
+	}
+	if !a.cfg.EnableRiskyExtractors {
+		writeError(w, http.StatusForbidden, "risky extractors are disabled")
+		return
+	}
+
+	target, err := a.providers.extractor.StreamURL(providerID, pid)
+	if err != nil {
+		slog.Warn("stream resolve failed", "track", id, "error", err)
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "Cannot build upstream stream request")
+		return
+	}
+	for _, name := range []string{"Range", "If-Range", "If-None-Match", "If-Modified-Since"} {
+		if value := r.Header.Get(name); value != "" {
+			upstream.Header.Set(name, value)
+		}
+	}
+	upstream.Header.Set("Accept", "audio/*,*/*;q=0.8")
+	upstream.Header.Set("User-Agent", "MusicOrchestrator/1.0")
+
+	resp, err := http.DefaultClient.Do(upstream)
+	if err != nil {
+		slog.Warn("stream proxy failed", "track", id, "error", err)
+		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+		return
+	}
+	defer resp.Body.Close()
+	for _, name := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified", "Cache-Control"} {
+		if value := resp.Header.Get(name); value != "" {
+			w.Header().Set(name, value)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func (a *App) download(w http.ResponseWriter, r *http.Request) {

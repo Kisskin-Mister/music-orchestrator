@@ -22,6 +22,7 @@ type persisted struct {
 	Favorites map[string]Favorite `json:"favorites"`
 	Playlists map[string]Playlist `json:"playlists"`
 	Jobs      map[string]Job      `json:"jobs"`
+	Settings  Settings            `json:"settings"`
 }
 
 func NewStore(path string) (*Store, error) {
@@ -223,9 +224,8 @@ func (s *Store) CreatePlaylist(ownerID, name, desc string) (Playlist, error) {
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	p := Playlist{ID: newID("pl"), OwnerID: ownerID, Name: name, Description: desc, Tracks: []PlaylistTrack{}, CreatedAt: now, UpdatedAt: now}
-	p = p.withAggregates()
 	s.data.Playlists[p.ID] = p
-	return p, s.saveLocked()
+	return p.withAggregates(), s.saveLocked()
 }
 func (s *Store) ListPlaylists(ownerID string) []Playlist {
 	s.mu.Lock()
@@ -264,9 +264,8 @@ func (s *Store) AddPlaylistTrack(ownerID, id string, track Track) (Playlist, boo
 	now := time.Now().UTC()
 	p.Tracks = append(p.Tracks, PlaylistTrack{ID: newID("pli"), TrackID: track.ID, Track: &track, Position: len(p.Tracks), AddedAt: now})
 	p.UpdatedAt = now
-	p = p.withAggregates()
 	s.data.Playlists[id] = p
-	return p, true, s.saveLocked()
+	return p.withAggregates(), true, s.saveLocked()
 }
 
 func (s *Store) UpdatePlaylist(ownerID, id string, update PlaylistUpdate) (Playlist, bool, error) {
@@ -290,9 +289,8 @@ func (s *Store) UpdatePlaylist(ownerID, id string, update PlaylistUpdate) (Playl
 		p.CoverURL = strings.TrimSpace(*update.CoverURL)
 	}
 	p.UpdatedAt = time.Now().UTC()
-	p = p.withAggregatesPreservingCover()
 	s.data.Playlists[id] = p
-	return p, true, s.saveLocked()
+	return p.withAggregates(), true, s.saveLocked()
 }
 
 func (s *Store) DeletePlaylist(ownerID, id string) bool {
@@ -328,9 +326,8 @@ func (s *Store) RemovePlaylistTrack(ownerID, id, trackID string) (Playlist, bool
 	}
 	p.Tracks = tracks
 	p.UpdatedAt = time.Now().UTC()
-	p = p.withAggregatesPreservingCover()
 	s.data.Playlists[id] = p
-	return p, true, s.saveLocked()
+	return p.withAggregates(), true, s.saveLocked()
 }
 func (s *Store) SaveJob(ownerID string, job Job) error {
 	s.mu.Lock()
@@ -422,7 +419,6 @@ func sanitizeTrackForStorage(t Track) Track {
 }
 
 func (p Playlist) withAggregates() Playlist {
-	p.CoverURL = ""
 	return p.withAggregatesPreservingCover()
 }
 
@@ -446,3 +442,58 @@ func (p Playlist) withAggregatesPreservingCover() Playlist {
 }
 
 func ownerTrackKey(ownerID, trackID string) string { return ownerID + "\x00" + trackID }
+
+// MergeSettings applies a partial settings patch onto the stored overrides and
+// returns the merged result. Fields left nil in the patch keep their previous
+// value, so the UI can send only what the user actually changed.
+func (s *Store) MergeSettings(patch Settings) (Settings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.data.Settings
+	if patch.EnableRiskyExtractors != nil {
+		cur.EnableRiskyExtractors = patch.EnableRiskyExtractors
+	}
+	if patch.ExtractorTimeoutSeconds != nil {
+		cur.ExtractorTimeoutSeconds = patch.ExtractorTimeoutSeconds
+	}
+	if patch.DownloadTimeoutSeconds != nil {
+		cur.DownloadTimeoutSeconds = patch.DownloadTimeoutSeconds
+	}
+	if patch.SessionTTLHours != nil {
+		cur.SessionTTLHours = patch.SessionTTLHours
+	}
+	if patch.SecureCookies != nil {
+		cur.SecureCookies = patch.SecureCookies
+	}
+	if patch.PublicMediaBaseURL != nil {
+		cur.PublicMediaBaseURL = patch.PublicMediaBaseURL
+	}
+	if patch.CORSOrigins != nil {
+		cur.CORSOrigins = patch.CORSOrigins
+	}
+	if patch.YouTubeAPIKey != nil {
+		cur.YouTubeAPIKey = patch.YouTubeAPIKey
+	}
+	if patch.SoundCloudClientID != nil {
+		cur.SoundCloudClientID = patch.SoundCloudClientID
+	}
+	if patch.NavidromeBaseURL != nil {
+		cur.NavidromeBaseURL = patch.NavidromeBaseURL
+	}
+	if patch.NavidromeUsername != nil {
+		cur.NavidromeUsername = patch.NavidromeUsername
+	}
+	if patch.NavidromeToken != nil {
+		cur.NavidromeToken = patch.NavidromeToken
+	}
+	s.data.Settings = cur
+	return cur, s.saveLocked()
+}
+
+// StoredSettings returns the persisted overrides, applied on top of env config
+// at boot so a restart does not silently revert what an admin changed.
+func (s *Store) StoredSettings() Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data.Settings
+}

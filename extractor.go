@@ -128,9 +128,6 @@ func (e *Extractor) StreamURL(providerID, pid string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.URL != "" {
-		return info.URL, nil
-	}
 	formats := info.Formats
 	sort.SliceStable(formats, func(i, j int) bool { return scoreFormat(formats[i]) > scoreFormat(formats[j]) })
 	for _, f := range formats {
@@ -143,6 +140,9 @@ func (e *Extractor) StreamURL(providerID, pid string) (string, error) {
 			return f.URL, nil
 		}
 	}
+	if info.URL != "" {
+		return info.URL, nil
+	}
 	return "", fmt.Errorf("no playable audio URL")
 }
 
@@ -153,6 +153,16 @@ func scoreFormat(f ytdlpFormat) float64 {
 	}
 	if f.VCodec == "none" {
 		s += 10000
+	}
+	// AVPlayer does not decode YouTube's usual WebM/Opus bestaudio (iOS
+	// reports AVFoundation -11828). Prefer broadly playable AAC/M4A, then MP3,
+	// while retaining the old bitrate/audio-only ordering as a fallback.
+	if f.Ext == "m4a" || strings.HasPrefix(f.ACodec, "mp4a") || f.ACodec == "aac" {
+		s += 1_000_000
+	} else if f.Ext == "mp3" || f.ACodec == "mp3" {
+		s += 900_000
+	} else if f.Ext == "webm" || f.ACodec == "opus" {
+		s -= 100_000
 	}
 	return s
 }

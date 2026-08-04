@@ -113,6 +113,9 @@ func TestSearchPlaybackAndDownload(t *testing.T) {
 	if pb.PlaybackType != "extractor_stream" || pb.StreamURL == nil {
 		t.Fatalf("bad playback %#v", pb)
 	}
+	if *pb.StreamURL != "/v1/stream/youtube_stream:yt1" {
+		t.Fatalf("playback must stay behind the compatible stream proxy, got %q", *pb.StreamURL)
+	}
 
 	body := strings.NewReader(`{"track_id":"youtube_stream:yt1","format":"mp3"}`)
 	req = httptest.NewRequest("POST", "/v1/downloads", body)
@@ -193,6 +196,67 @@ func TestSearchPlaybackAndDownload(t *testing.T) {
 	app.ServeHTTP(r, httptest.NewRequest("GET", mediaURL, nil))
 	if r.Code != http.StatusNotFound {
 		t.Fatalf("deleted media should 404 got %d", r.Code)
+	}
+}
+
+func TestStreamFormatPrefersIOSCompatibleAudio(t *testing.T) {
+	m4a := ytdlpFormat{Ext: "m4a", ACodec: "mp4a.40.2", VCodec: "none", ABR: 128}
+	webm := ytdlpFormat{Ext: "webm", ACodec: "opus", VCodec: "none", ABR: 160}
+	if scoreFormat(m4a) <= scoreFormat(webm) {
+		t.Fatalf("M4A/AAC must outrank WebM/Opus for AVPlayer: m4a=%v webm=%v", scoreFormat(m4a), scoreFormat(webm))
+	}
+}
+
+func TestFlutterWebIsServedWithSPAFallback(t *testing.T) {
+	app := testApp(t, false)
+	app.cfg.WebRoot = t.TempDir()
+	index := []byte("<html><title>Flutter app</title></html>")
+	if err := os.WriteFile(filepath.Join(app.cfg.WebRoot, "index.html"), index, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, route := range []string{"/", "/playlists"} {
+		r := httptest.NewRecorder()
+		app.ServeHTTP(r, httptest.NewRequest(http.MethodGet, route, nil))
+		if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "Flutter app") {
+			t.Fatalf("web route %s returned %d: %s", route, r.Code, r.Body.String())
+		}
+	}
+
+	r := httptest.NewRecorder()
+	app.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/missing.js", nil))
+	if r.Code != http.StatusNotFound {
+		t.Fatalf("missing web asset must be 404, got %d", r.Code)
+	}
+}
+
+func TestPlaybackUsesSessionOwnedDownload(t *testing.T) {
+	app := testApp(t, true)
+	ownerID := "owner-test"
+	mediaURL := "/media/youtube_stream-yt1.mp3"
+	if err := app.store.SaveJob(ownerID, Job{
+		ID:      "job-session",
+		Type:    "download",
+		Status:  "succeeded",
+		TrackID: "youtube_stream:yt1",
+		Result:  map[string]any{"provider_id": "youtube_stream", "provider_track_id": "yt1", "media_url": mediaURL},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	token := app.sessions.create(ownerID, true, app.sessionTTL())
+	req := httptest.NewRequest("GET", "/v1/playback/youtube_stream:yt1", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	r := httptest.NewRecorder()
+	app.ServeHTTP(r, req)
+	if r.Code != http.StatusOK {
+		t.Fatalf("playback %d: %s", r.Code, r.Body.String())
+	}
+	var pb Playback
+	if err := json.Unmarshal(r.Body.Bytes(), &pb); err != nil {
+		t.Fatal(err)
+	}
+	if pb.PlaybackType != "local_cached_stream" || pb.StreamURL == nil || *pb.StreamURL != mediaURL {
+		t.Fatalf("session-owned download must be used, got %#v", pb)
 	}
 }
 

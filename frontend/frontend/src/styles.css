@@ -1,13 +1,70 @@
 @import "tailwindcss";
 
-:root{color-scheme:dark;font-family:"Geist","SF Pro Text",ui-sans-serif,system-ui,sans-serif;background:#08090c;color:#f6f3ea;--accent:#b8f545;--surface:#0f1117;--surface-2:#151923;--border:rgba(255,255,255,.10);--muted:#8c919e}
-*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(circle at 50% -10%,rgba(184,245,69,.08),transparent 34rem),#08090c}button,input{font:inherit}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+/* Self-hosted (no Google Fonts CDN call at runtime, matches the app's self-hosted ethos).
+   Unbounded: geometric display face with a real Cyrillic design (not a mechanical extension) —
+   carries the app's headlines instead of falling back to system sans like every other AI-generated shell.
+   JetBrains Mono pairs with it for eyebrows, durations and technical labels: display + monospace contrast. */
+@font-face{font-family:"Unbounded Var";src:url("/fonts/unbounded-cyrillic.woff2") format("woff2");font-weight:200 900;font-style:normal;font-display:swap;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:"Unbounded Var";src:url("/fonts/unbounded-latin.woff2") format("woff2");font-weight:200 900;font-style:normal;font-display:swap}
+@font-face{font-family:"JetBrains Mono Var";src:url("/fonts/jbmono-cyrillic.woff2") format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:"JetBrains Mono Var";src:url("/fonts/jbmono-latin.woff2") format("woff2");font-weight:400 700;font-style:normal;font-display:swap}
+
+:root{
+  color-scheme:dark;font-family:"Geist","SF Pro Text",ui-sans-serif,system-ui,sans-serif;background:#08090c;color:#f6f3ea;
+  /* --accent-raw is whatever the user picked (preset or custom); --accent clamps it to a
+     fixed lightness/chroma so text-black stays readable on it no matter which hue is chosen.
+     See src/lib/theme.ts for how this gets set. */
+  --accent-raw:#b8f545;
+  --accent:oklch(from var(--accent-raw) 82% 0.16 h);
+  --accent-glow:oklch(from var(--accent-raw) 82% 0.16 h / 18%);
+  --surface:#0f1117;--surface-2:#151923;--surface-3:#1c212c;--border:rgba(255,255,255,.10);--muted:#8c919e;
+  --font-display:"Unbounded Var","Unbounded",ui-sans-serif,system-ui,sans-serif;
+  --font-mono:"JetBrains Mono Var","JetBrains Mono",ui-monospace,SFMono-Regular,monospace;
+}
+/* Tailwind's lime color scale is this app's accent scale, so remapping it here
+   repaints every existing bg-lime, text-lime and border-lime class with the chosen accent.
+   surface-2/3 give panels a real elevation step instead of ad hoc bg-white/[0.0N] overlays.
+   font-mono is remapped app-wide to JetBrains Mono; font-display is a new utility for headings. */
+@theme{
+  --color-lime-50:color-mix(in oklab, var(--accent) 12%, white);
+  --color-lime-100:color-mix(in oklab, var(--accent) 28%, white);
+  --color-lime-200:color-mix(in oklab, var(--accent) 58%, white);
+  --color-lime-300:var(--accent);
+  --color-surface:var(--surface);
+  --color-surface-2:var(--surface-2);
+  --color-surface-3:var(--surface-3);
+  --font-mono:var(--font-mono);
+  --font-display:var(--font-display);
+}
+*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(circle at 50% -12%,var(--accent-glow),transparent 40rem),radial-gradient(circle at 100% 10%,rgba(255,255,255,.035),transparent 30rem),#08090c}button,input{font:inherit}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .player-marquee{display:block;overflow:hidden;white-space:nowrap}.player-marquee>span{display:inline-block;max-width:100%;vertical-align:bottom}.player-marquee--animate>span{max-width:none;min-width:100%;padding-right:2rem;animation:player-marquee 14s linear infinite}@media (min-width:768px){.player-marquee--animate>span{animation:none}}@keyframes player-marquee{0%,18%{transform:translateX(0)}100%{transform:translateX(-55%)}}
 
+.stagger-in{animation:stagger-in 420ms cubic-bezier(.22,.9,.24,1) both;animation-delay:calc(var(--stagger-index,0) * 35ms)}@keyframes stagger-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.no-scrollbar{scrollbar-width:none}.no-scrollbar::-webkit-scrollbar{display:none}
 .range{width:100%;accent-color:var(--accent);cursor:pointer}.range:focus-visible{outline:2px solid var(--accent);outline-offset:4px}.eq{display:inline-flex;align-items:flex-end;gap:2px;height:12px;color:currentColor}.eq>span{width:3px;height:5px;border-radius:2px;background:currentColor;animation:eq-bounce 900ms ease-in-out infinite}.eq>span:nth-child(2){animation-delay:140ms}.eq>span:nth-child(3){animation-delay:280ms}.eq--paused>span{animation-play-state:paused;height:5px}@keyframes eq-bounce{0%,100%{height:4px}50%{height:12px}}
 .seek-control{position:relative;width:100%;height:18px;display:grid;align-items:center}.seek-control__rail{position:absolute;left:0;right:0;top:50%;height:6px;transform:translateY(-50%);overflow:hidden;border-radius:999px;background:rgba(255,255,255,.10);pointer-events:none}.seek-control__buffer,.seek-control__progress{position:absolute;left:0;top:0;height:100%;border-radius:inherit;transition:width 180ms ease}.seek-control__buffer{background:rgba(255,255,255,.24)}.seek-control__progress{background:var(--accent);box-shadow:0 0 14px rgba(184,245,69,.35)}.seek-control__input{position:relative;z-index:1;opacity:.78;background:transparent}
 .source-toggle{display:flex;align-items:center;justify-content:space-between;gap:.75rem;border:1px solid var(--border);border-radius:1.25rem;background:linear-gradient(135deg,rgba(255,255,255,.055),rgba(255,255,255,.025));padding:1rem;text-align:left;color:#c5cad4;transition:transform 180ms ease,border-color 180ms ease,background 180ms ease,opacity 180ms ease}.source-toggle:hover:not(:disabled){transform:translateY(-1px);border-color:rgba(184,245,69,.35);background:linear-gradient(135deg,rgba(184,245,69,.09),rgba(255,255,255,.035))}.source-toggle--active{border-color:rgba(184,245,69,.6);background:linear-gradient(135deg,rgba(184,245,69,.15),rgba(184,245,69,.045));color:#efffcb}.source-toggle:disabled{cursor:not-allowed;opacity:.45}.source-switch{display:block;width:3rem;height:1.75rem;flex-shrink:0;border-radius:999px;background:rgba(255,255,255,.11);padding:.25rem;transition:background 180ms ease}.source-switch>span{display:block;width:1.25rem;height:1.25rem;border-radius:999px;background:#050608;transition:transform 180ms cubic-bezier(.22,1,.36,1)}.source-switch--on{background:var(--accent)}.source-switch--on>span{transform:translateX(1.25rem)}
 .player-morph-card{view-transition-name:player-card;contain:layout paint}.player-morph-card::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(135deg,rgba(255,255,255,.10),transparent 32%,rgba(184,245,69,.08));opacity:.85}.player-morph-card>*{position:relative}::view-transition-old(root),::view-transition-new(root){animation:none!important}::view-transition-group(player-card){animation-duration:520ms;animation-timing-function:cubic-bezier(.2,.9,.2,1)}::view-transition-old(player-card),::view-transition-new(player-card){height:100%;overflow:clip;animation-duration:520ms;animation-timing-function:cubic-bezier(.2,.9,.2,1)}::view-transition-old(player-card){border-radius:26px;animation-name:player-morph-old}::view-transition-new(player-card){border-radius:32px;animation-name:player-morph-new}@keyframes player-morph-old{from{opacity:1;filter:blur(0);transform:scale(1) translateY(0)}to{opacity:0;filter:blur(4px);transform:scale(.985) translateY(10px)}}@keyframes player-morph-new{from{opacity:0;filter:blur(8px);transform:scale(.985) translateY(24px)}to{opacity:1;filter:blur(0);transform:scale(1) translateY(0)}}
 .player-sheet-backdrop{animation:sheet-backdrop-in 260ms ease-out both}.player-sheet{animation:sheet-rise 460ms cubic-bezier(.16,1,.3,1) both;will-change:transform;touch-action:pan-y}.player-sheet-backdrop--closing{animation:sheet-backdrop-out 220ms ease-in both}.player-sheet--closing{animation:sheet-drop 300ms cubic-bezier(.45,0,1,1) both}@keyframes sheet-backdrop-in{from{opacity:0}to{opacity:1}}@keyframes sheet-backdrop-out{from{opacity:1}to{opacity:0}}@keyframes sheet-rise{from{opacity:.3;transform:translateY(72px) scale(.965)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes sheet-drop{from{opacity:1;transform:translateY(0) scale(1)}to{opacity:0;transform:translateY(72px) scale(.975)}}.player-mini--enter{animation:mini-enter 520ms cubic-bezier(.16,1,.3,1) both}@keyframes mini-enter{from{opacity:0;transform:translateY(22px) scale(.96);filter:blur(6px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
-.view-enter{animation:view-enter 240ms cubic-bezier(.22,.9,.24,1) both}@keyframes view-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+/* `backwards` rather than `both`: a retained transform (even translateY(0))
+   makes this element a containing block, which breaks `position: fixed` for
+   anything inside the view — the floating create button ended up mid-list. */
+.view-enter{animation:view-enter 240ms cubic-bezier(.22,.9,.24,1) backwards}@keyframes view-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}.eq>span{animation:none;height:6px}.player-marquee--animate span{animation:none}::view-transition-old(player-card),::view-transition-new(player-card){animation:none!important}}
+
+/* Desktop: the expanded player is a right-hand panel (the pattern current
+   streaming apps use) rather than a centred modal, so the library stays
+   visible beside it. Mobile keeps the bottom sheet. */
+@media (min-width: 1024px) {
+  /* The morph view-transition is a mobile affordance; its `contain` and
+     `view-transition-name` interfere with the side panel's own animation. */
+  .player-sheet.player-morph-card { view-transition-name: none; contain: none; }
+  /* Opacity-only entrance. A transform-based slide leaves the panel offset
+     whenever the animation is frozen rather than playing (background tab,
+     interrupted transition): the resting position must not depend on an
+     animation actually running. */
+  .player-sheet { animation: panel-fade-in 220ms ease-out; }
+  .player-sheet--closing { animation: panel-slide-out 220ms cubic-bezier(.45,0,1,1) both; }
+  @keyframes panel-fade-in { from { opacity: .45; } to { opacity: 1; } }
+  @keyframes panel-slide-out { from { opacity: 1; } to { opacity: 0; } }
+}

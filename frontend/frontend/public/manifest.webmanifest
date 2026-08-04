@@ -1,0 +1,16 @@
+{
+  "name": "Music Orchestrator",
+  "short_name": "Orchestrator",
+  "description": "Личная self-hosted музыкальная медиатека: поиск, воспроизведение и офлайн.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#08090C",
+  "theme_color": "#08090C",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -15,3 +15,45 @@ export type APIError = { error:{ code:string; message:string; details?:unknown }
 export type User = { id:string; username:string; role:'user'|'admin'; created_at:string; updated_at:string };
 export type SessionInfo = { authenticated:boolean; user_id?:string; username?:string; auth_type?:string; role?:'user'|'admin'; setup_required:boolean; totp_required:boolean; totp_enabled:boolean; login_enabled:boolean };
 export type LoginResult = SessionInfo;
+
+/** Server settings an admin can review and change from the UI.
+ *  Secrets are never sent back — only whether they are set. Fields under
+ *  `read_only` are fixed at boot or deliberately env-only (see settings.go). */
+export type ServerSettings = {
+  enable_risky_extractors: boolean;
+  extractor_timeout_seconds: number;
+  download_timeout_seconds: number;
+  session_ttl_hours: number;
+  secure_cookies: boolean;
+  public_media_base_url: string;
+  cors_origins: string[];
+  youtube_api_key_set: boolean;
+  soundcloud_client_id_set: boolean;
+  navidrome_token_set: boolean;
+  navidrome_base_url: string;
+  navidrome_username: string;
+  read_only: {
+    addr: string;
+    environment: string;
+    store_path: string;
+    media_root: string;
+    web_root: string;
+    yt_dlp_binary: string;
+    reason: string;
+  };
+};
+
+export type ServerSettingsPatch = Partial<{
+  enable_risky_extractors: boolean;
+  extractor_timeout_seconds: number;
+  download_timeout_seconds: number;
+  session_ttl_hours: number;
+  secure_cookies: boolean;
+  public_media_base_url: string;
+  cors_origins: string[];
+  youtube_api_key: string;
+  soundcloud_client_id: string;
+  navidrome_base_url: string;
+  navidrome_username: string;
+  navidrome_token: string;
+}>;

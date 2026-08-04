@@ -1,0 +1,47 @@
+name: music_orchestrator
+description: "Music Orchestrator — мобильный клиент для self-hosted музыкального бэкенда."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider: ^6.1.2
+  http: ^1.2.2
+  shared_preferences: ^2.3.3
+  just_audio: ^0.9.42
+  cached_network_image: ^3.4.1
+  file_picker: ^8.3.7
+  path_provider: ^2.1.6
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.14.1
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/
+  fonts:
+    - family: Unbounded
+      fonts:
+        - asset: assets/fonts/Unbounded-Variable.ttf
+    - family: JetBrains Mono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Variable.ttf
+
+# Иконки приложения собираются из общего мастера, который рисует
+# tools/make_icons.py — так iOS, Android и веб всегда остаются в одном облике.
+flutter_launcher_icons:
+  image_path: "../assets/icon-1024.png"
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  web:
+    generate: false
