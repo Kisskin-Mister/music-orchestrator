@@ -410,12 +410,6 @@ function PlaylistTrackPicker({ playlistId, existingIDs, onClose }: { playlistId:
   const [query, setQuery] = useState('');
   const [addedIDs, setAddedIDs] = useState<Set<string>>(new Set());
   const addPlaylistTrack = useAddPlaylistTrack();
-  useEffect(() => {
-    const next = draft.trim();
-    if (next === query) return;
-    const timer = window.setTimeout(() => setQuery(next), 350);
-    return () => window.clearTimeout(timer);
-  }, [draft, query]);
   const result = useSearch(query, DEFAULT_PROVIDERS, 10, 0);
   const hasFreshResult = Boolean(query) && result.data?.query === query && !result.isFetching;
   const found = hasFreshResult ? result.data?.items ?? [] : [];
@@ -428,12 +422,12 @@ function PlaylistTrackPicker({ playlistId, existingIDs, onClose }: { playlistId:
       <h4 className="m-0 text-sm font-semibold">Найти трек для плейлиста</h4>
       <button type="button" onClick={onClose} aria-label="Закрыть поиск треков" className="rounded-lg p-1.5 text-[#a6abb7] hover:bg-white/8"><X size={17} /></button>
     </div>
-    <div className="flex h-12 items-center gap-3 rounded-xl border border-white/12 bg-surface px-4 transition focus-within:border-lime-300/60">
+    <form onSubmit={(e) => { e.preventDefault(); const next = draft.trim(); if (next) setQuery(next); }} className="flex h-12 items-center gap-3 rounded-xl border border-white/12 bg-surface px-4 transition focus-within:border-lime-300/60">
       <Search size={17} className="text-[#8c919e]" />
       <input autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название или исполнитель" aria-label="Поиск трека для плейлиста" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#626875]" />
       {result.isFetching && <Loader2 className="animate-spin text-lime-300" size={16} />}
-    </div>
-    {!query && <p className="m-0 mt-3 text-xs text-[#8c919e]">Начни вводить — результаты подтянутся из подключённых источников.</p>}
+    </form>
+    {!query && <p className="m-0 mt-3 text-xs text-[#8c919e]">Введи название и нажми Enter.</p>}
     {Boolean(query) && result.isError && <p className="m-0 mt-3 text-xs text-red-200">Поиск не удался. Попробуй ещё раз.</p>}
     {Boolean(found.length) && <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto overscroll-contain pr-1">{found.map((track) => {
       const already = existingIDs.has(track.id) || addedIDs.has(track.id);
