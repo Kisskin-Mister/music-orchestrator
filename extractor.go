@@ -12,20 +12,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
-type streamCacheEntry struct {
-	url     string
-	headers map[string]string
-	expires time.Time
-}
-
-type Extractor struct {
-	cfg        Config
-	streamCache sync.Map
-}
+type Extractor struct{ cfg Config }
 
 func NewExtractor(cfg Config) *Extractor { return &Extractor{cfg: cfg} }
 
@@ -107,9 +97,6 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 		}
 		if providerID == "soundcloud_stream" {
 			if source == "" {
-				source = first(it.URL, "https://soundcloud.com/"+it.ID)
-			}
-			if source == "" {
 				continue
 			}
 			pid = scIDFromURL(source)
@@ -139,14 +126,6 @@ func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
 // that negotiated them, so replacing the User-Agent with our own can turn a
 // working link into a 403.
 func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]string, error) {
-	cacheKey := providerID + ":" + pid
-	if cached, ok := e.streamCache.Load(cacheKey); ok {
-		entry := cached.(streamCacheEntry)
-		if time.Now().Before(entry.expires) {
-			return entry.url, entry.headers, nil
-		}
-		e.streamCache.Delete(cacheKey)
-	}
 	u, err := e.urlFor(providerID, pid)
 	if err != nil {
 		return "", nil, err
@@ -156,23 +135,18 @@ func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]str
 		return "", nil, err
 	}
 	if info.URL != "" {
-		e.streamCache.Store(cacheKey, streamCacheEntry{url: info.URL, headers: info.HTTPHeaders, expires: time.Now().Add(60 * time.Second)})
 		return info.URL, info.HTTPHeaders, nil
 	}
 	formats := info.Formats
 	sort.SliceStable(formats, func(i, j int) bool { return scoreFormat(formats[i]) > scoreFormat(formats[j]) })
 	for _, f := range formats {
 		if f.URL != "" && f.VCodec == "none" && f.ACodec != "none" {
-			headers := headersOr(f.HTTPHeaders, info.HTTPHeaders)
-			e.streamCache.Store(cacheKey, streamCacheEntry{url: f.URL, headers: headers, expires: time.Now().Add(60 * time.Second)})
-			return f.URL, headers, nil
+			return f.URL, headersOr(f.HTTPHeaders, info.HTTPHeaders), nil
 		}
 	}
 	for _, f := range formats {
 		if f.URL != "" && f.ACodec != "none" {
-			headers := headersOr(f.HTTPHeaders, info.HTTPHeaders)
-			e.streamCache.Store(cacheKey, streamCacheEntry{url: f.URL, headers: headers, expires: time.Now().Add(60 * time.Second)})
-			return f.URL, headers, nil
+			return f.URL, headersOr(f.HTTPHeaders, info.HTTPHeaders), nil
 		}
 	}
 	return "", nil, fmt.Errorf("no playable audio URL")

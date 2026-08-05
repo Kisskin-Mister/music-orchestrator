@@ -130,7 +130,7 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
   const toggleProvider = (id: ProviderId) => setSelectedProviders((current) => current.includes(id) ? current.filter((p) => p !== id) : [...current, id]);
 
   return <main className="mx-auto grid min-h-screen max-w-[1600px] gap-4 px-3 py-4 pb-[calc(10rem+env(safe-area-inset-bottom,0px))] lg:grid-cols-[76px_minmax(0,1fr)] lg:px-5 lg:pb-24 xl:grid-cols-[240px_minmax(0,1fr)] xl:gap-8 xl:px-8">
-    <aside className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom,0px))] z-30 rounded-2xl border border-white/10 bg-surface-2/95 p-2 shadow-[0_16px_48px_rgba(0,0,0,.4)] backdrop-blur lg:sticky lg:top-5 lg:block lg:h-fit lg:min-h-[calc(100vh-2.5rem-5.5rem)] lg:p-3 xl:sticky xl:top-5 xl:p-4">
+    <aside className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom,0px))] z-30 rounded-2xl border border-white/10 bg-surface-2/95 p-2 shadow-[0_16px_48px_rgba(0,0,0,.4)] backdrop-blur lg:static lg:inset-auto lg:block lg:h-fit lg:min-h-[calc(100vh-2.5rem-5.5rem)] lg:p-3 xl:sticky xl:top-5 xl:p-4">
       <div className="hidden items-center gap-2.5 px-1.5 pb-5 lg:flex">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-lime-300 text-black"><Music2 size={17} /></span>
         <span className="hidden truncate font-display text-[13px] font-bold leading-tight tracking-[-.02em] xl:inline">Orchestrator</span>
@@ -161,19 +161,11 @@ function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: stri
 
 function SearchView({ draft, setDraft, submit, clearSearch, query, resultQuery, providers, selectedProviders, toggleProvider, isLoading, isFetching, isError, total, limit, more, tracks, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { draft:string; setDraft:(v:string)=>void; submit:(e:FormEvent)=>void; clearSearch:()=>void; query:string; resultQuery:string; providers:Provider[]; selectedProviders:ProviderId[]; toggleProvider:(id:ProviderId)=>void; isLoading:boolean; isFetching:boolean; isError:boolean; total:number; limit:number; more:()=>void; tracks: Track[] } & TrackSurfaceProps) {
   const trimmedDraft = draft.trim();
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const hasMore = tracks.length < total;
-  useEffect(() => {
-    if (!sentinelRef.current || !hasMore || isFetching) return;
-    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) more(); }, { rootMargin: '300px' });
-    observer.observe(sentinelRef.current);
-    return () => observer.disconnect();
-  }, [tracks.length, total, isFetching, hasMore, more]);
   const waitingForDebounce = Boolean(trimmedDraft) && trimmedDraft !== query;
-  const hasFreshResult = Boolean(query) && resultQuery === query && !isFetching;
+  const hasFreshResult = Boolean(query) && resultQuery === query;
   const visibleTracks = hasFreshResult ? tracks : [];
   const visibleTotal = hasFreshResult ? total : 0;
-  const waitingForFreshResult = Boolean(query) && (!hasFreshResult || isFetching) && !isError;
+  const waitingForFreshResult = Boolean(query) && !hasFreshResult && !isError;
   const showInitialSpinner = Boolean(query) && (isLoading || isFetching || waitingForFreshResult) && !visibleTracks.length;
   const canShowEmpty = Boolean(query) && hasFreshResult && !waitingForDebounce && !isFetching && !isLoading && !isError && !visibleTracks.length;
   return <>
@@ -190,7 +182,7 @@ function SearchView({ draft, setDraft, submit, clearSearch, query, resultQuery, 
     {(waitingForDebounce || showInitialSpinner) && <><span className="sr-only" role="status">Ищу треки…</span><TrackListSkeleton /></>}
     {query && isError && !waitingForDebounce && <section role="alert" className="rounded-xl border border-red-300/25 bg-red-300/[0.06] p-5"><h2 className="m-0 text-lg">Поиск не удался</h2><p className="mb-0 text-[#b9bec9]">Источник не ответил вовремя. Попробуй ещё раз или сократи запрос.</p></section>}
     {canShowEmpty && <EmptyState icon={SearchX} title={`По запросу «${query}» ничего нет`} hint="Попробуй написать короче или другими словами — или выбери другой источник выше." />}
-    {Boolean(visibleTracks.length) && <><TrackList tracks={visibleTracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} />{isFetching && <div className="mt-3"><SpinnerLine label="Подгружаю…" /></div>}{hasMore && <div ref={sentinelRef} className="py-4">{isFetching && <SpinnerLine label="Подгружаю…" />}</div>}<p className="mt-3 text-xs text-[#777]">Показано {visibleTracks.length} из {visibleTotal}</p></>}
+    {Boolean(visibleTracks.length) && <><TrackList tracks={visibleTracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} />{isFetching && <div className="mt-3"><SpinnerLine label="Подгружаю…" /></div>}{visibleTracks.length < visibleTotal && <button onClick={more} disabled={isFetching} className="mt-4 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-surface-2 px-4 py-3 text-sm hover:bg-white/8 disabled:opacity-50">{isFetching ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />} Ещё 20</button>}<p className="mt-3 text-xs text-[#777]">Показано {Math.min(limit, visibleTracks.length)} из {visibleTotal}</p></>}
   </>;
 }
 
@@ -325,22 +317,16 @@ function PlaylistsView({ playlists, libraryTracks, favoriteIDs, downloadedByTrac
 }
 
 function PlaylistCard({ playlist, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { playlist: Playlist } & TrackSurfaceProps) {
+  void playlists; void downloadedByTrack;
   const updatePlaylist = useUpdatePlaylist();
   const deletePlaylist = useDeletePlaylist();
   const removePlaylistTrack = useRemovePlaylistTrack();
-  const addPlaylistTrack = useAddPlaylistTrack();
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [armedTrackID, setArmedTrackID] = useState<string | null>(null);
   const [name, setName] = useState(playlist.name);
   const [description, setDescription] = useState(playlist.description ?? '');
-  const [addingTrack, setAddingTrack] = useState(false);
-  const [addTrackQuery, setAddTrackQuery] = useState('');
   const tracks = playlist.tracks.map((item) => item.track).filter(Boolean) as Track[];
-  const existingIDs = new Set(tracks.map(t => t.id));
-  const addSearch = useSearch(addTrackQuery, ['youtube_stream', 'soundcloud_stream'], 10, 0);
-  const addResults = (addSearch.data?.items ?? []).filter(t => !existingIDs.has(t.id));
-  const addToPlaylist = async (trackId: string) => { await addPlaylistTrack.mutateAsync({ playlistId: playlist.id, trackId }); };
   useEffect(() => { setName(playlist.name); setDescription(playlist.description ?? ''); }, [playlist.name, playlist.description]);
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -383,22 +369,6 @@ function PlaylistCard({ playlist, playlists, favoriteIDs, downloadedByTrack, onL
       </div>}
     </div>
     {tracks.length ? <div className="overflow-hidden">{tracks.map((track, index) => <div key={track.id} className="grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-white/8 px-4 py-2 last:border-b-0"><button type="button" onClick={() => onPlay(track, tracks, index)} className="flex min-w-0 items-center gap-3 text-left"><span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg"><TrackArt track={track} className="h-full w-full" /></span><span className="min-w-0"><strong className="block truncate">{track.title}</strong><small className="block truncate text-[#8c919e]">{track.artist || 'Исполнитель не указан'} · {formatDuration(track.duration_seconds)}</small></span></button><div className="flex items-center gap-1"><button aria-label={favoriteIDs.has(track.id) ? 'Убрать лайк' : 'Поставить лайк'} onClick={() => onLike(track)} className={`grid h-10 w-10 place-items-center rounded-lg hover:bg-white/8 ${favoriteIDs.has(track.id) ? 'text-red-300' : ''}`}><Heart size={17} fill={favoriteIDs.has(track.id) ? 'currentColor' : 'none'} /></button><button type="button" onClick={() => removeTrack(track)} disabled={removePlaylistTrack.isPending} className={`grid h-10 w-10 place-items-center rounded-lg ${armedTrackID === track.id ? 'bg-red-300 text-black' : 'text-red-200 hover:bg-red-300/10'}`} aria-label={armedTrackID === track.id ? 'Подтвердить удаление трека из плейлиста' : 'Убрать трек из плейлиста'} title={armedTrackID === track.id ? 'Подтвердить' : 'Убрать'}><Trash2 size={17} /></button></div></div>)}</div> : <div className="p-5 text-sm text-[#9aa0ad]">Плейлист пустой. Открой меню любого трека и добавь его сюда.</div>}
-    {addingTrack && <div className="border-t border-white/8 p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <input value={addTrackQuery} onChange={e => setAddTrackQuery(e.target.value)} placeholder="Найти трек для добавления…" className="flex-1 rounded-xl border border-white/10 bg-surface-2 px-4 py-3 outline-none text-sm" autoFocus />
-        <button onClick={() => { setAddingTrack(false); setAddTrackQuery(''); }} className="rounded-xl p-3 text-[#a6abb7] hover:bg-white/8"><X size={18} /></button>
-      </div>
-      {addSearch.isFetching && <SpinnerLine label="Ищу…" />}
-      {addResults.map(track => <div key={track.id} className="flex items-center gap-3 rounded-xl px-3 py-2 hover:bg-white/5">
-        <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg"><TrackArt track={track} className="h-full w-full" /></span>
-        <span className="min-w-0 flex-1"><strong className="block truncate text-sm">{track.title}</strong><small className="block truncate text-[#8c919e]">{track.artist || '—'}</small></span>
-        <button onClick={() => addToPlaylist(track.id)} className="rounded-lg bg-lime-300 px-3 py-1.5 text-xs font-medium text-black">Добавить</button>
-      </div>)}
-      {addTrackQuery && !addSearch.isFetching && !addResults.length && <p className="text-sm text-[#8c919e] px-3">Ничего не найдено или все треки уже в плейлисте.</p>}
-    </div>}
-    {!addingTrack && <div className="border-t border-white/8 p-3">
-      <button onClick={() => setAddingTrack(true)} className="flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-white/12 py-3 text-sm text-[#8c919e] hover:border-lime-300/40 hover:text-lime-200 transition"><Plus size={16} /> Добавить трек</button>
-    </div>}
   </section>;
 }
 
@@ -579,7 +549,7 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
   useEffect(() => { const frame = requestAnimationFrame(() => setMiniEntered(true)); return () => cancelAnimationFrame(frame); }, []);
   useEffect(() => {
     if (!currentTrack || !('mediaSession' in navigator)) return;
-    navigator.mediaSession.metadata = new MediaMetadata({ title: currentTrack.title, artist: currentTrack.artist ?? 'Исполнитель не указан', artwork: currentTrack.artwork_url ? [{ src: artworkURL(currentTrack.artwork_url) || currentTrack.artwork_url, sizes: '512x512', type: 'image/jpeg' }] : [] });
+    navigator.mediaSession.metadata = new MediaMetadata({ title: currentTrack.title, artist: currentTrack.artist ?? 'Исполнитель не указан', artwork: currentTrack.artwork_url ? [{ src: currentTrack.artwork_url }] : [] });
     navigator.mediaSession.setActionHandler('play', () => toggleTrack(currentTrack));
     navigator.mediaSession.setActionHandler('pause', () => toggleTrack(currentTrack));
     navigator.mediaSession.setActionHandler('previoustrack', previous);
@@ -608,14 +578,7 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
   const bufferProgress = canSeek ? Math.min(100, Math.max(progress, (bufferedTime / duration) * 100)) : 0;
   const updateBuffered = (audio: HTMLAudioElement) => {
     const mediaDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
-    const providerDur = currentTrack?.duration_seconds;
-    if (mediaDuration > 0) {
-      if (typeof providerDur === 'number' && providerDur > 0 && mediaDuration > providerDur * 1.3) {
-        setDuration(providerDur);
-      } else {
-        setDuration(mediaDuration);
-      }
-    }
+    if (mediaDuration > 0) setDuration(mediaDuration);
     let bufferedEnd = 0;
     for (let index = 0; index < audio.buffered.length; index += 1) {
       const start = audio.buffered.start(index);

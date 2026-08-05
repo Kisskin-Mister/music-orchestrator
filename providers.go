@@ -3,10 +3,8 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"strings"
-	"sync"
 )
 
 type ProviderService struct {
@@ -54,34 +52,20 @@ func (p *ProviderService) Search(query string, providerIDs []string, limit int) 
 			providerIDs = []string{"youtube_stream", "soundcloud_stream"}
 		}
 	}
-	extractorIDs := []string{}
+	out := []Track{}
 	for _, id := range providerIDs {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 		switch id {
 		case "youtube_stream", "soundcloud_stream":
 			if p.cfg.EnableRiskyExtractors {
-				extractorIDs = append(extractorIDs, id)
+				items, err := p.extractor.Search(id, query, limit)
+				if err == nil {
+					out = append(out, items...)
+				}
 			}
 		}
-	}
-	type searchResult struct{ tracks []Track }
-	results := make([]searchResult, len(extractorIDs))
-	var wg sync.WaitGroup
-	for i, id := range extractorIDs {
-		wg.Add(1)
-		go func(idx int, providerID string) {
-			defer wg.Done()
-			items, err := p.extractor.Search(providerID, query, limit)
-			if err != nil {
-				slog.Warn("parallel provider search failed", "provider", providerID, "error", err)
-				return
-			}
-			results[idx].tracks = items
-		}(i, id)
-	}
-	wg.Wait()
-	out := []Track{}
-	for _, r := range results {
-		out = append(out, r.tracks...)
 	}
 	if limit > 0 && len(out) > limit {
 		return out[:limit]
