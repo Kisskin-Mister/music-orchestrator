@@ -96,8 +96,9 @@ class PlayerController extends ChangeNotifier {
   Duration get duration {
     final raw = _audio.duration ?? Duration.zero;
     final track = currentTrack;
-    if (track == null || track.durationSeconds <= 0) return raw;
-    final providerMs = track.durationSeconds * 1000;
+    final ds = track?.durationSeconds;
+    if (ds == null || ds <= 0) return raw;
+    final providerMs = ds * 1000;
     if (raw.inMilliseconds > providerMs * _overreportedRatio) {
       return Duration(milliseconds: providerMs);
     }
