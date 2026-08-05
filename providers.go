@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 type ProviderService struct {
@@ -52,20 +54,39 @@ func (p *ProviderService) Search(query string, providerIDs []string, limit int) 
 			providerIDs = []string{"youtube_stream", "soundcloud_stream"}
 		}
 	}
-	out := []Track{}
+	extractorIDs := []string{}
 	for _, id := range providerIDs {
-		if limit > 0 && len(out) >= limit {
-			break
-		}
 		switch id {
 		case "youtube_stream", "soundcloud_stream":
 			if p.cfg.EnableRiskyExtractors {
-				items, err := p.extractor.Search(id, query, limit)
-				if err == nil {
-					out = append(out, items...)
-				}
+				extractorIDs = append(extractorIDs, id)
 			}
 		}
+	}
+	// Each extractor search is a cold yt-dlp process, so running them one after
+	// another made total latency the sum of both. Fan out and keep the results
+	// in request order so the provider ordering the caller asked for survives.
+	results := make([][]Track, len(extractorIDs))
+	var wg sync.WaitGroup
+	for i, id := range extractorIDs {
+		wg.Add(1)
+		go func(idx int, providerID string) {
+			defer wg.Done()
+			items, err := p.extractor.Search(providerID, query, limit)
+			if err != nil {
+				slog.Warn("provider search failed", "provider", providerID, "error", err)
+				return
+			}
+			results[idx] = items
+		}(i, id)
+	}
+	wg.Wait()
+	out := []Track{}
+	for _, items := range results {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		out = append(out, items...)
 	}
 	if limit > 0 && len(out) > limit {
 		return out[:limit]

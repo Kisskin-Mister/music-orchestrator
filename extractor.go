@@ -12,10 +12,25 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
-type Extractor struct{ cfg Config }
+// Resolving a stream URL costs a cold yt-dlp process (seconds). The CDN links
+// stay valid far longer than a minute, so a short cache turns replay/seek/next
+// within one listening session into an instant hit without risking a stale link.
+const streamCacheTTL = 60 * time.Second
+
+type streamCacheEntry struct {
+	url     string
+	headers map[string]string
+	expires time.Time
+}
+
+type Extractor struct {
+	cfg         Config
+	streamCache sync.Map // cacheKey -> streamCacheEntry
+}
 
 func NewExtractor(cfg Config) *Extractor { return &Extractor{cfg: cfg} }
 
@@ -97,6 +112,9 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 		}
 		if providerID == "soundcloud_stream" {
 			if source == "" {
+				source = soundcloudFallbackURL(it)
+			}
+			if source == "" {
 				continue
 			}
 			pid = scIDFromURL(source)
@@ -107,6 +125,27 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 		out = append(out, e.toTrack(providerID, pid, it, source))
 	}
 	return out, nil
+}
+
+// scsearch entries occasionally arrive without webpage_url/original_url/url —
+// partially hydrated results. Skipping those dropped every SoundCloud hit, so
+// rebuild the canonical API URL from the numeric track id instead: yt-dlp
+// resolves that form, and it passes the host allowlist in scURLFromID.
+func soundcloudFallbackURL(it ytdlpInfo) string {
+	id := strings.TrimSpace(it.ID)
+	if id == "" || !isDigits(id) {
+		return ""
+	}
+	return "https://api.soundcloud.com/tracks/" + id
+}
+
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
@@ -126,6 +165,15 @@ func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
 // that negotiated them, so replacing the User-Agent with our own can turn a
 // working link into a 403.
 func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]string, error) {
+	cacheKey := providerID + ":" + pid
+	if cached, ok := e.streamCache.Load(cacheKey); ok {
+		if entry, ok := cached.(streamCacheEntry); ok {
+			if time.Now().Before(entry.expires) {
+				return entry.url, entry.headers, nil
+			}
+			e.streamCache.Delete(cacheKey)
+		}
+	}
 	u, err := e.urlFor(providerID, pid)
 	if err != nil {
 		return "", nil, err
@@ -135,21 +183,28 @@ func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]str
 		return "", nil, err
 	}
 	if info.URL != "" {
-		return info.URL, info.HTTPHeaders, nil
+		return e.cacheStream(cacheKey, info.URL, info.HTTPHeaders), info.HTTPHeaders, nil
 	}
 	formats := info.Formats
 	sort.SliceStable(formats, func(i, j int) bool { return scoreFormat(formats[i]) > scoreFormat(formats[j]) })
 	for _, f := range formats {
 		if f.URL != "" && f.VCodec == "none" && f.ACodec != "none" {
-			return f.URL, headersOr(f.HTTPHeaders, info.HTTPHeaders), nil
+			headers := headersOr(f.HTTPHeaders, info.HTTPHeaders)
+			return e.cacheStream(cacheKey, f.URL, headers), headers, nil
 		}
 	}
 	for _, f := range formats {
 		if f.URL != "" && f.ACodec != "none" {
-			return f.URL, headersOr(f.HTTPHeaders, info.HTTPHeaders), nil
+			headers := headersOr(f.HTTPHeaders, info.HTTPHeaders)
+			return e.cacheStream(cacheKey, f.URL, headers), headers, nil
 		}
 	}
 	return "", nil, fmt.Errorf("no playable audio URL")
+}
+
+func (e *Extractor) cacheStream(cacheKey, url string, headers map[string]string) string {
+	e.streamCache.Store(cacheKey, streamCacheEntry{url: url, headers: headers, expires: time.Now().Add(streamCacheTTL)})
+	return url
 }
 
 func headersOr(primary, fallback map[string]string) map[string]string {
