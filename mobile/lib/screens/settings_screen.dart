@@ -144,6 +144,14 @@ class SettingsScreen extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _BackendSection(auth: auth, library: library),
+
+        const SizedBox(height: 32),
+        Center(
+          child: Text(
+            'Music Orchestrator v0.3.0',
+            style: TextStyle(color: AppColors.subtle, fontSize: 12),
+          ),
+        ),
       ],
     );
   }
