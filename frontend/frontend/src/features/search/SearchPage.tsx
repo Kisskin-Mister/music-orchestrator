@@ -1,8 +1,8 @@
-import { CSSProperties, FormEvent, MouseEvent, ReactNode, TouchEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Cloud, Download, Folder, Heart, Library, ListMusic, Loader2, LogOut, MoreHorizontal, Music2, Pause, Pencil, Play, Plus, Repeat, Repeat1, Search, SearchX, Settings, ShieldCheck, Shuffle, SkipBack, SkipForward, Trash2, X, Youtube } from 'lucide-react';
+import { CSSProperties, FormEvent, MouseEvent, ReactNode, TouchEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Cloud, Download, Folder, Heart, Library, ListMusic, Loader2, LogOut, MoreHorizontal, Music2, Pause, Pencil, Play, Plus, Repeat, Repeat1, Search, SearchX, Settings, ShieldCheck, Shuffle, SkipBack, SkipForward, Trash2, X, Youtube } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAddFavorite, useAddPlaylistTrack, useCreateDownload, useCreatePlaylist, useDeleteDownload, useDeleteFavorite, useDeletePlaylist, useDownloads, useFavorites, usePlayback, usePlaylists, useProviders, useRemovePlaylistTrack, useSearch, useSession, useUpdateAccount, useCreateUser, useDeleteUser, useUpdatePlaylist, useUpdateUser, useUsers } from '@/api/queries';
-import { usePlayerStore } from '@/store/player';
+import { OVERREPORTED_DURATION_RATIO, usePlayerStore } from '@/store/player';
 import { analytics } from '@/lib/analytics';
 import { artworkURL, getBackendBaseURL, getDefaultBackendBaseURL, setBackendBaseURL } from '@/api/client';
 import { ACCENT_PRESETS, applyAccent, getStoredAccent } from '@/lib/theme';
@@ -127,10 +127,13 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
   };
   const submit = (e: FormEvent) => { e.preventDefault(); const next = draft.trim(); setSearchLimit(PAGE_SIZE); setQuery(next); setActiveView('search'); if (next) analytics.track('search_submitted', { provider_ids: selectedProviders }); };
   const clearSearch = () => { setDraft(''); setQuery(''); setSearchLimit(PAGE_SIZE); };
+  // Stable identity: the infinite-scroll observer keys off this, and a fresh
+  // function each render would tear down and refire the observer in a loop.
+  const loadMore = useCallback(() => setSearchLimit((n) => n + PAGE_SIZE), []);
   const toggleProvider = (id: ProviderId) => setSelectedProviders((current) => current.includes(id) ? current.filter((p) => p !== id) : [...current, id]);
 
   return <main className="mx-auto grid min-h-screen max-w-[1600px] gap-4 px-3 py-4 pb-[calc(10rem+env(safe-area-inset-bottom,0px))] lg:grid-cols-[76px_minmax(0,1fr)] lg:px-5 lg:pb-24 xl:grid-cols-[240px_minmax(0,1fr)] xl:gap-8 xl:px-8">
-    <aside className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom,0px))] z-30 rounded-2xl border border-white/10 bg-surface-2/95 p-2 shadow-[0_16px_48px_rgba(0,0,0,.4)] backdrop-blur lg:static lg:inset-auto lg:block lg:h-fit lg:min-h-[calc(100vh-2.5rem-5.5rem)] lg:p-3 xl:sticky xl:top-5 xl:p-4">
+    <aside className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom,0px))] z-30 rounded-2xl border border-white/10 bg-surface-2/95 p-2 shadow-[0_16px_48px_rgba(0,0,0,.4)] backdrop-blur lg:sticky lg:top-5 lg:inset-x-auto lg:bottom-auto lg:block lg:h-fit lg:min-h-[calc(100vh-2.5rem-5.5rem)] lg:p-3 xl:sticky xl:top-5 xl:p-4">
       <div className="hidden items-center gap-2.5 px-1.5 pb-5 lg:flex">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-lime-300 text-black"><Music2 size={17} /></span>
         <span className="hidden truncate font-display text-[13px] font-bold leading-tight tracking-[-.02em] xl:inline">Orchestrator</span>
@@ -139,7 +142,7 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
     </aside>
     <section className="min-w-0"><div key={activeView} className="view-enter">
       {activeView === 'library' && <LibraryView tracks={filteredLibrary} filter={libraryFilter} setFilter={setLibraryFilter} {...shared} />}
-      {activeView === 'search' && <SearchView draft={draft} setDraft={setDraft} submit={submit} clearSearch={clearSearch} query={query} resultQuery={result.data?.query ?? ''} providers={providers.data ?? []} selectedProviders={selectedProviders} toggleProvider={toggleProvider} isLoading={result.isLoading} isFetching={result.isFetching} isError={result.isError} total={result.data?.total ?? 0} limit={searchLimit} more={() => setSearchLimit((n) => n + PAGE_SIZE)} tracks={result.data?.items ?? []} {...shared} />}
+      {activeView === 'search' && <SearchView draft={draft} setDraft={setDraft} submit={submit} clearSearch={clearSearch} query={query} resultQuery={result.data?.query ?? ''} providers={providers.data ?? []} selectedProviders={selectedProviders} toggleProvider={toggleProvider} isLoading={result.isLoading} isFetching={result.isFetching} isError={result.isError} total={result.data?.total ?? 0} limit={searchLimit} more={loadMore} tracks={result.data?.items ?? []} {...shared} />}
       {activeView === 'playlists' && <PlaylistsView libraryTracks={libraryTracks} creating={creatingPlaylist} setCreating={setCreatingPlaylist} {...shared} />}
       {activeView === 'downloads' && <DownloadsView jobs={downloadedJobs.filter((j) => j.track_id)} filter={downloadsFilter} setFilter={setDownloadsFilter} {...shared} />}
       {activeView === 'settings' && <SettingsView providers={providers.data ?? []} riskyEnabled={riskyEnabled} selectedProviders={selectedProviders} toggleProvider={toggleProvider} onLogout={onLogout} localMode={localMode} onLeaveLocalMode={onLeaveLocalMode} />}
@@ -162,12 +165,30 @@ function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: stri
 function SearchView({ draft, setDraft, submit, clearSearch, query, resultQuery, providers, selectedProviders, toggleProvider, isLoading, isFetching, isError, total, limit, more, tracks, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { draft:string; setDraft:(v:string)=>void; submit:(e:FormEvent)=>void; clearSearch:()=>void; query:string; resultQuery:string; providers:Provider[]; selectedProviders:ProviderId[]; toggleProvider:(id:ProviderId)=>void; isLoading:boolean; isFetching:boolean; isError:boolean; total:number; limit:number; more:()=>void; tracks: Track[] } & TrackSurfaceProps) {
   const trimmedDraft = draft.trim();
   const waitingForDebounce = Boolean(trimmedDraft) && trimmedDraft !== query;
-  const hasFreshResult = Boolean(query) && resultQuery === query;
+  /* `tracks` still holds the previous query's items while the next request is in
+     flight, so matching on resultQuery alone let another query's results render
+     under the loading skeleton. Anything still being typed or fetched counts as
+     not-fresh, and the skeleton shows on its own. */
+  const staleInFlight = isFetching && resultQuery !== query;
+  const hasFreshResult = Boolean(query) && resultQuery === query && !waitingForDebounce && !staleInFlight;
   const visibleTracks = hasFreshResult ? tracks : [];
   const visibleTotal = hasFreshResult ? total : 0;
   const waitingForFreshResult = Boolean(query) && !hasFreshResult && !isError;
   const showInitialSpinner = Boolean(query) && (isLoading || isFetching || waitingForFreshResult) && !visibleTracks.length;
   const canShowEmpty = Boolean(query) && hasFreshResult && !waitingForDebounce && !isFetching && !isLoading && !isError && !visibleTracks.length;
+  const canLoadMore = visibleTracks.length > 0 && visibleTracks.length < visibleTotal;
+  /* An observed sentinel replaces the old "Ещё 20" button: the next page is
+     requested as soon as the end of the list comes into view, one rootMargin
+     screen early so the spinner is rarely visible at all. */
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !canLoadMore || isFetching) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) more(); }, { rootMargin: '400px 0px' });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [canLoadMore, isFetching, more]);
   return <>
     <SectionHeader eyebrow="Поиск" title="Что послушаем?" subtitle="Начни вводить название или исполнителя — результаты подтянутся сами, Enter запускает поиск сразу.">
       <form onSubmit={submit} className="mb-3 flex h-13 items-center gap-3 rounded-xl border border-white/12 bg-surface px-4 transition focus-within:border-lime-300/60">
@@ -182,7 +203,7 @@ function SearchView({ draft, setDraft, submit, clearSearch, query, resultQuery, 
     {(waitingForDebounce || showInitialSpinner) && <><span className="sr-only" role="status">Ищу треки…</span><TrackListSkeleton /></>}
     {query && isError && !waitingForDebounce && <section role="alert" className="rounded-xl border border-red-300/25 bg-red-300/[0.06] p-5"><h2 className="m-0 text-lg">Поиск не удался</h2><p className="mb-0 text-[#b9bec9]">Источник не ответил вовремя. Попробуй ещё раз или сократи запрос.</p></section>}
     {canShowEmpty && <EmptyState icon={SearchX} title={`По запросу «${query}» ничего нет`} hint="Попробуй написать короче или другими словами — или выбери другой источник выше." />}
-    {Boolean(visibleTracks.length) && <><TrackList tracks={visibleTracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} />{isFetching && <div className="mt-3"><SpinnerLine label="Подгружаю…" /></div>}{visibleTracks.length < visibleTotal && <button onClick={more} disabled={isFetching} className="mt-4 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-surface-2 px-4 py-3 text-sm hover:bg-white/8 disabled:opacity-50">{isFetching ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />} Ещё 20</button>}<p className="mt-3 text-xs text-[#777]">Показано {Math.min(limit, visibleTracks.length)} из {visibleTotal}</p></>}
+    {Boolean(visibleTracks.length) && <><TrackList tracks={visibleTracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} />{canLoadMore && <div ref={sentinelRef} className="mt-3 min-h-[1px]">{isFetching && <SpinnerLine label="Подгружаю…" />}</div>}<p className="mt-3 text-xs text-[#777]">Показано {Math.min(limit, visibleTracks.length)} из {visibleTotal}</p></>}
   </>;
 }
 
@@ -322,6 +343,7 @@ function PlaylistCard({ playlist, playlists, favoriteIDs, downloadedByTrack, onL
   const deletePlaylist = useDeletePlaylist();
   const removePlaylistTrack = useRemovePlaylistTrack();
   const [editing, setEditing] = useState(false);
+  const [addingTrack, setAddingTrack] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [armedTrackID, setArmedTrackID] = useState<string | null>(null);
   const [name, setName] = useState(playlist.name);
@@ -368,8 +390,57 @@ function PlaylistCard({ playlist, playlists, favoriteIDs, downloadedByTrack, onL
         <div className="mt-4 grid grid-cols-2 gap-2"><button onClick={removePlaylist} disabled={deletePlaylist.isPending} className="rounded-xl bg-red-300 px-4 py-3 font-medium text-black disabled:opacity-50">Удалить</button><button onClick={() => setConfirmDelete(false)} className="rounded-xl border border-white/10 px-4 py-3 text-[#d7dbe4] hover:bg-white/8">Оставить</button></div>
       </div>}
     </div>
-    {tracks.length ? <div className="overflow-hidden">{tracks.map((track, index) => <div key={track.id} className="grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-white/8 px-4 py-2 last:border-b-0"><button type="button" onClick={() => onPlay(track, tracks, index)} className="flex min-w-0 items-center gap-3 text-left"><span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg"><TrackArt track={track} className="h-full w-full" /></span><span className="min-w-0"><strong className="block truncate">{track.title}</strong><small className="block truncate text-[#8c919e]">{track.artist || 'Исполнитель не указан'} · {formatDuration(track.duration_seconds)}</small></span></button><div className="flex items-center gap-1"><button aria-label={favoriteIDs.has(track.id) ? 'Убрать лайк' : 'Поставить лайк'} onClick={() => onLike(track)} className={`grid h-10 w-10 place-items-center rounded-lg hover:bg-white/8 ${favoriteIDs.has(track.id) ? 'text-red-300' : ''}`}><Heart size={17} fill={favoriteIDs.has(track.id) ? 'currentColor' : 'none'} /></button><button type="button" onClick={() => removeTrack(track)} disabled={removePlaylistTrack.isPending} className={`grid h-10 w-10 place-items-center rounded-lg ${armedTrackID === track.id ? 'bg-red-300 text-black' : 'text-red-200 hover:bg-red-300/10'}`} aria-label={armedTrackID === track.id ? 'Подтвердить удаление трека из плейлиста' : 'Убрать трек из плейлиста'} title={armedTrackID === track.id ? 'Подтвердить' : 'Убрать'}><Trash2 size={17} /></button></div></div>)}</div> : <div className="p-5 text-sm text-[#9aa0ad]">Плейлист пустой. Открой меню любого трека и добавь его сюда.</div>}
+    {tracks.length ? <div className="overflow-hidden">{tracks.map((track, index) => <div key={track.id} className="grid min-h-[72px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-white/8 px-4 py-2 last:border-b-0"><button type="button" onClick={() => onPlay(track, tracks, index)} className="flex min-w-0 items-center gap-3 text-left"><span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg"><TrackArt track={track} className="h-full w-full" /></span><span className="min-w-0"><strong className="block truncate">{track.title}</strong><small className="block truncate text-[#8c919e]">{track.artist || 'Исполнитель не указан'} · {formatDuration(track.duration_seconds)}</small></span></button><div className="flex items-center gap-1"><button aria-label={favoriteIDs.has(track.id) ? 'Убрать лайк' : 'Поставить лайк'} onClick={() => onLike(track)} className={`grid h-10 w-10 place-items-center rounded-lg hover:bg-white/8 ${favoriteIDs.has(track.id) ? 'text-red-300' : ''}`}><Heart size={17} fill={favoriteIDs.has(track.id) ? 'currentColor' : 'none'} /></button><button type="button" onClick={() => removeTrack(track)} disabled={removePlaylistTrack.isPending} className={`grid h-10 w-10 place-items-center rounded-lg ${armedTrackID === track.id ? 'bg-red-300 text-black' : 'text-red-200 hover:bg-red-300/10'}`} aria-label={armedTrackID === track.id ? 'Подтвердить удаление трека из плейлиста' : 'Убрать трек из плейлиста'} title={armedTrackID === track.id ? 'Подтвердить' : 'Убрать'}><Trash2 size={17} /></button></div></div>)}</div> : <div className="p-5 text-sm text-[#9aa0ad]">Плейлист пустой. Найди трек кнопкой ниже или добавь его из меню любого трека.</div>}
+    <div className="border-t border-white/8 px-4 py-3">
+      <button type="button" onClick={() => setAddingTrack((value) => !value)} aria-expanded={addingTrack} className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-surface-2 px-4 py-2.5 text-sm text-[#d7dbe4] transition hover:bg-white/8"><Plus size={16} /> Добавить трек</button>
+    </div>
+    {addingTrack && <PlaylistTrackPicker playlistId={playlist.id} existingIDs={new Set(tracks.map((item) => item.id))} onClose={() => setAddingTrack(false)} />}
   </section>;
+}
+
+/* Adding to a playlist used to be possible only from a track's own menu, which
+   meant opening a playlist to fill it was a dead end. This is the same search
+   the main view uses, scoped to one playlist and debounced the same 350ms. */
+function PlaylistTrackPicker({ playlistId, existingIDs, onClose }: { playlistId: string; existingIDs: Set<string>; onClose: () => void }) {
+  const [draft, setDraft] = useState('');
+  const [query, setQuery] = useState('');
+  const [addedIDs, setAddedIDs] = useState<Set<string>>(new Set());
+  const addPlaylistTrack = useAddPlaylistTrack();
+  useEffect(() => {
+    const next = draft.trim();
+    if (next === query) return;
+    const timer = window.setTimeout(() => setQuery(next), 350);
+    return () => window.clearTimeout(timer);
+  }, [draft, query]);
+  const result = useSearch(query, DEFAULT_PROVIDERS, 10, 0);
+  const hasFreshResult = Boolean(query) && result.data?.query === query && !result.isFetching;
+  const found = hasFreshResult ? result.data?.items ?? [] : [];
+  const add = async (track: Track) => {
+    await addPlaylistTrack.mutateAsync({ playlistId, trackId: track.id });
+    setAddedIDs((current) => new Set(current).add(track.id));
+  };
+  return <div className="border-t border-white/8 bg-surface-2/40 p-4">
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <h4 className="m-0 text-sm font-semibold">Найти трек для плейлиста</h4>
+      <button type="button" onClick={onClose} aria-label="Закрыть поиск треков" className="rounded-lg p-1.5 text-[#a6abb7] hover:bg-white/8"><X size={17} /></button>
+    </div>
+    <div className="flex h-12 items-center gap-3 rounded-xl border border-white/12 bg-surface px-4 transition focus-within:border-lime-300/60">
+      <Search size={17} className="text-[#8c919e]" />
+      <input autoFocus value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Название или исполнитель" aria-label="Поиск трека для плейлиста" className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#626875]" />
+      {result.isFetching && <Loader2 className="animate-spin text-lime-300" size={16} />}
+    </div>
+    {!query && <p className="m-0 mt-3 text-xs text-[#8c919e]">Начни вводить — результаты подтянутся из подключённых источников.</p>}
+    {Boolean(query) && result.isError && <p className="m-0 mt-3 text-xs text-red-200">Поиск не удался. Попробуй ещё раз.</p>}
+    {Boolean(found.length) && <div className="mt-3 grid max-h-72 gap-2 overflow-y-auto overscroll-contain pr-1">{found.map((track) => {
+      const already = existingIDs.has(track.id) || addedIDs.has(track.id);
+      return <div key={track.id} className="grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-white/10 bg-surface-2 px-3 py-2">
+        <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-lg"><TrackArt track={track} className="h-full w-full" /></span>
+        <span className="min-w-0"><strong className="block truncate text-sm">{track.title}</strong><small className="block truncate text-[#8c919e]">{track.artist || 'Исполнитель не указан'} · {formatDuration(track.duration_seconds)}</small></span>
+        <button type="button" onClick={() => add(track)} disabled={already || addPlaylistTrack.isPending} aria-label={already ? `${track.title} уже в плейлисте` : `Добавить ${track.title}`} title={already ? 'Уже в плейлисте' : 'Добавить'} className={`grid h-10 w-10 place-items-center rounded-lg disabled:opacity-60 ${already ? 'text-lime-300' : 'text-[#a6abb7] hover:bg-white/8'}`}>{already ? <Check size={18} /> : <Plus size={18} />}</button>
+      </div>;
+    })}</div>}
+    {Boolean(query) && hasFreshResult && !found.length && <p className="m-0 mt-3 text-xs text-[#8c919e]">Ничего не нашлось — попробуй другой запрос.</p>}
+  </div>;
 }
 
 function SettingsView({ providers, riskyEnabled, selectedProviders, toggleProvider, onLogout, localMode = false, onLeaveLocalMode }: { providers: Provider[]; riskyEnabled: boolean; selectedProviders: ProviderId[]; toggleProvider: (id: ProviderId) => void; onLogout?: () => void; localMode?: boolean; onLeaveLocalMode?: () => void }) {
@@ -492,6 +563,7 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
   const seekingRef = useRef(false);
   const seekDraftRef = useRef(0);
   const didSwipe = useRef(false);
+  const autoAdvancedRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedTime, setBufferedTime] = useState(0);
@@ -544,12 +616,16 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
   useEffect(() => { if (query.error) setError(query.error instanceof Error ? query.error.message : 'Playback failed'); }, [query.error, setError]);
   useEffect(() => { const audio = audioRef.current; if (audio) audio.volume = volume; }, [volume]);
   useEffect(() => { const audio = audioRef.current; if (!audio) return; if (status === 'paused') { audio.pause(); return; } if (playback?.stream_url && status === 'playing') audio.play().catch((error) => setError(error instanceof Error ? error.message : 'Autoplay blocked')); }, [playback?.stream_url, status, setError]);
-  useEffect(() => { seekingRef.current = false; seekDraftRef.current = 0; setCurrentTime(0); setDuration(0); setBufferedTime(0); setIsSeeking(false); setSeekDraft(0); }, [currentTrack?.id]);
+  useEffect(() => { seekingRef.current = false; seekDraftRef.current = 0; autoAdvancedRef.current = false; setCurrentTime(0); setDuration(0); setBufferedTime(0); setIsSeeking(false); setSeekDraft(0); }, [currentTrack?.id]);
   useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current); }, []);
   useEffect(() => { const frame = requestAnimationFrame(() => setMiniEntered(true)); return () => cancelAnimationFrame(frame); }, []);
   useEffect(() => {
     if (!currentTrack || !('mediaSession' in navigator)) return;
-    navigator.mediaSession.metadata = new MediaMetadata({ title: currentTrack.title, artist: currentTrack.artist ?? 'Исполнитель не указан', artwork: currentTrack.artwork_url ? [{ src: currentTrack.artwork_url }] : [] });
+    // iOS refuses to fetch the raw YouTube/SoundCloud artwork host (CORS), and it
+    // drops artwork entries that declare no sizes/type — so the lock screen ended
+    // up blank. The backend proxy plus explicit descriptors fixes both.
+    const artwork = artworkURL(currentTrack.artwork_url);
+    navigator.mediaSession.metadata = new MediaMetadata({ title: currentTrack.title, artist: currentTrack.artist ?? 'Исполнитель не указан', artwork: artwork ? [{ src: artwork, sizes: '512x512', type: 'image/jpeg' }] : [] });
     navigator.mediaSession.setActionHandler('play', () => toggleTrack(currentTrack));
     navigator.mediaSession.setActionHandler('pause', () => toggleTrack(currentTrack));
     navigator.mediaSession.setActionHandler('previoustrack', previous);
@@ -578,7 +654,14 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
   const bufferProgress = canSeek ? Math.min(100, Math.max(progress, (bufferedTime / duration) * 100)) : 0;
   const updateBuffered = (audio: HTMLAudioElement) => {
     const mediaDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
-    if (mediaDuration > 0) setDuration(mediaDuration);
+    // YouTube's CDN sends a Content-Length for the whole video+audio container,
+    // so the audio element reports roughly double the real track and then plays
+    // silence to the end. When the element claims far more than the provider
+    // metadata, the provider number is the one that matches the audio.
+    const providerDuration = currentTrack.duration_seconds ?? 0;
+    const overreported = providerDuration > 0 && mediaDuration > providerDuration * OVERREPORTED_DURATION_RATIO;
+    const effectiveDuration = overreported ? providerDuration : mediaDuration;
+    if (effectiveDuration > 0) setDuration(effectiveDuration);
     let bufferedEnd = 0;
     for (let index = 0; index < audio.buffered.length; index += 1) {
       const start = audio.buffered.start(index);
@@ -586,7 +669,20 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
       if (audio.currentTime >= start && audio.currentTime <= end) { bufferedEnd = end; break; }
       if (end > bufferedEnd) bufferedEnd = end;
     }
-    setBufferedTime(Math.max(0, Math.min(bufferedEnd, mediaDuration || bufferedEnd)));
+    setBufferedTime(Math.max(0, Math.min(bufferedEnd, effectiveDuration || bufferedEnd)));
+  };
+  /* When the element overreports duration it keeps "playing" silence past the real
+     end, so its own `ended` event arrives minutes late. Advance at the corrected
+     end instead — and rewind by hand for repeat-one, since the loop attribute
+     would also wait for the bogus end. */
+  const advanceIfTrackEnded = (audio: HTMLAudioElement) => {
+    const providerDuration = currentTrack.duration_seconds ?? 0;
+    const mediaDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
+    if (providerDuration <= 0 || mediaDuration <= providerDuration * OVERREPORTED_DURATION_RATIO) return;
+    if (audio.currentTime < providerDuration || autoAdvancedRef.current) return;
+    autoAdvancedRef.current = true;
+    if (repeat === 'one') { autoAdvancedRef.current = false; audio.currentTime = 0; return; }
+    next();
   };
   const liked = favoriteIDs.has(currentTrack.id);
   const cached = downloadedByTrack.get(currentTrack.id);
@@ -666,7 +762,7 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
         </div>
         <div data-player-control="true" className="hidden gap-2 md:flex"><button aria-label={liked ? 'Убрать лайк' : 'Поставить лайк'} onClick={() => onLike(currentTrack)} className={`grid h-11 w-11 place-items-center rounded-2xl border border-white/10 hover:bg-white/8 ${liked ? 'text-red-300' : 'text-[#a6abb7]'}`}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></button><button aria-label={downloaded ? 'Уже скачано' : 'Скачать'} disabled={!currentTrack.policy.download_allowed || downloaded || createDownload.isPending} onClick={download} className={`grid h-11 w-11 place-items-center rounded-2xl border border-white/10 hover:bg-white/8 disabled:opacity-50 ${downloaded ? 'text-lime-300' : 'text-[#a6abb7]'}`}>{createDownload.isPending ? <Loader2 className="animate-spin" size={18} /> : downloaded ? <Folder size={18} /> : <Download size={18} />}</button></div>
       </div>
-      <div data-player-control="true" className="mt-2 grid min-w-0 gap-2 md:mt-0"><div className="hidden items-center justify-center gap-2 md:flex"><button aria-label="Shuffle" onClick={toggleShuffle} className={`rounded-xl p-2 ${shuffle ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}><Shuffle size={17} /></button><button aria-label="Previous" onClick={previous} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipBack size={18} /></button><button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-10 w-10 place-items-center rounded-full bg-lime-300 text-black shadow-lg shadow-lime-300/20">{query.isFetching ? <Loader2 className="animate-spin" size={19} /> : status === 'playing' ? <Pause size={19} /> : <Play size={19} />}</button><button aria-label="Next" onClick={next} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipForward size={18} /></button><button aria-label="Repeat" onClick={cycleRepeat} className={`rounded-xl p-2 ${activeRepeat ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}>{repeat === 'one' ? <Repeat1 size={17} /> : <Repeat size={17} />}</button><input className="range max-w-24" type="range" min={0} max={1} step={0.01} value={volume} onChange={(event) => setVolume(Number(event.currentTarget.value))} aria-label="Громкость" /></div><div className="grid grid-cols-[42px_1fr_42px] items-center gap-2 text-[11px] text-[#8c919e]"><span>{formatDuration(seekValue)}</span>{range}<span>{formatDuration(duration)}</span></div>{playback?.stream_url && <audio ref={audioRef} className="hidden" src={playback.stream_url} autoPlay loop={repeat === 'one'} onTimeUpdate={(e) => { if (!isSeeking) setCurrentTime(e.currentTarget.currentTime); updateBuffered(e.currentTarget); }} onProgress={(e) => updateBuffered(e.currentTarget)} onLoadedMetadata={(e) => { e.currentTarget.volume = volume; updateBuffered(e.currentTarget); updateDuration(e.currentTarget.duration); }} onDurationChange={(e) => updateDuration(e.currentTarget.duration)} onWaiting={() => setStatus('buffering')} onCanPlay={(e) => { updateBuffered(e.currentTarget); if (status === 'buffering') setStatus('playing'); }} onPlay={() => setStatus('playing')} onPause={() => { if (status !== 'playing') setStatus('paused'); }} onEnded={next} />}</div>
+      <div data-player-control="true" className="mt-2 grid min-w-0 gap-2 md:mt-0"><div className="hidden items-center justify-center gap-2 md:flex"><button aria-label="Shuffle" onClick={toggleShuffle} className={`rounded-xl p-2 ${shuffle ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}><Shuffle size={17} /></button><button aria-label="Previous" onClick={previous} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipBack size={18} /></button><button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-10 w-10 place-items-center rounded-full bg-lime-300 text-black shadow-lg shadow-lime-300/20">{query.isFetching ? <Loader2 className="animate-spin" size={19} /> : status === 'playing' ? <Pause size={19} /> : <Play size={19} />}</button><button aria-label="Next" onClick={next} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipForward size={18} /></button><button aria-label="Repeat" onClick={cycleRepeat} className={`rounded-xl p-2 ${activeRepeat ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}>{repeat === 'one' ? <Repeat1 size={17} /> : <Repeat size={17} />}</button><input className="range max-w-24" type="range" min={0} max={1} step={0.01} value={volume} onChange={(event) => setVolume(Number(event.currentTarget.value))} aria-label="Громкость" /></div><div className="grid grid-cols-[42px_1fr_42px] items-center gap-2 text-[11px] text-[#8c919e]"><span>{formatDuration(seekValue)}</span>{range}<span>{formatDuration(duration)}</span></div>{playback?.stream_url && <audio ref={audioRef} className="hidden" src={playback.stream_url} autoPlay loop={repeat === 'one'} onTimeUpdate={(e) => { if (!isSeeking) setCurrentTime(e.currentTarget.currentTime); updateBuffered(e.currentTarget); advanceIfTrackEnded(e.currentTarget); }} onProgress={(e) => updateBuffered(e.currentTarget)} onLoadedMetadata={(e) => { e.currentTarget.volume = volume; updateBuffered(e.currentTarget); updateDuration(e.currentTarget.duration); }} onDurationChange={(e) => updateDuration(e.currentTarget.duration)} onWaiting={() => setStatus('buffering')} onCanPlay={(e) => { updateBuffered(e.currentTarget); if (status === 'buffering') setStatus('playing'); }} onPlay={() => setStatus('playing')} onPause={() => { if (status !== 'playing') setStatus('paused'); }} onEnded={next} />}</div>
     </footer>)}
     {expanded && <div className={`player-sheet-backdrop fixed inset-0 z-50 grid place-items-end bg-black/70 p-0 backdrop-blur md:place-items-center md:p-3 lg:place-items-stretch lg:justify-items-end lg:bg-black/40 lg:p-0 ${sheetClosing ? 'player-sheet-backdrop--closing' : ''}`} role="dialog" aria-modal="true" aria-label="Плеер" onClick={closePlayer}>
       <section onClick={(event) => event.stopPropagation()} onTouchStart={onSheetTouchStart} onTouchMove={onSheetTouchMove} onTouchEnd={onSheetTouchEnd} style={sheetOffset > 0 ? { transform: `translateY(${sheetOffset}px)`, transition: 'none' } : { transition: 'transform 320ms cubic-bezier(.22,1,.36,1)' }} data-player-panel="true" className={`player-sheet player-morph-card max-h-[92dvh] w-full overflow-hidden rounded-t-[2rem] border border-white/10 bg-[#101217] shadow-2xl md:max-w-md md:rounded-[2rem] lg:h-full lg:max-h-none lg:w-[420px] lg:max-w-none lg:rounded-none lg:rounded-l-[1.75rem] lg:border-y-0 lg:border-r-0 ${sheetClosing ? 'player-sheet--closing' : ''}`}>

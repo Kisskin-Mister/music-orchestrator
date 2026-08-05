@@ -29,6 +29,14 @@ describe('correctedDurationSeconds', () => {
     expect(correctedDurationSeconds(0, 95)).toBe(95);
   });
 
+  it('keeps provider duration when the audio element overreports the container length', () => {
+    // YouTube CDN Content-Length covers video+audio, so the element claims ~2x.
+    expect(correctedDurationSeconds(200, 400)).toBe(200);
+    expect(correctedDurationSeconds(200, 261)).toBe(200);
+    // Just under the threshold is still treated as a real audio-element reading.
+    expect(correctedDurationSeconds(200, 259)).toBe(259);
+  });
+
   it('ignores invalid media durations', () => {
     expect(correctedDurationSeconds(201, 0)).toBe(201);
     expect(correctedDurationSeconds(201, Number.NaN)).toBe(201);

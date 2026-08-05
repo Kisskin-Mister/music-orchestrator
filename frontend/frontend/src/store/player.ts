@@ -1,16 +1,24 @@
 import { create } from 'zustand';
 import type { Playback, Track } from '@/api/types';
 
+// Насколько media duration должен превысить provider metadata, чтобы считать
+// его мусорным: YouTube CDN отдаёт Content-Length всего video+audio контейнера,
+// и audio element рапортует примерно двойную длину.
+export const OVERREPORTED_DURATION_RATIO = 1.3;
+
 // Реальная длительность из audio element важнее provider metadata:
 // поисковая выдача yt-dlp иногда отдаёт duration другого ролика.
+// Исключение — случай выше: там завышен именно audio element, и провайдер прав.
 export function correctedDurationSeconds(providerSeconds: number | undefined, mediaSeconds: number | undefined): number | undefined {
+  const provider = typeof providerSeconds === 'number' && Number.isFinite(providerSeconds) && providerSeconds > 0 ? Math.round(providerSeconds) : undefined;
   if (typeof mediaSeconds === 'number' && Number.isFinite(mediaSeconds) && mediaSeconds > 0) {
     const media = Math.round(mediaSeconds);
-    if (typeof providerSeconds !== 'number' || !Number.isFinite(providerSeconds) || providerSeconds <= 0) return media;
-    if (Math.abs(providerSeconds - media) > 1) return media;
-    return Math.round(providerSeconds);
+    if (provider === undefined) return media;
+    if (media > provider * OVERREPORTED_DURATION_RATIO) return provider;
+    if (Math.abs(provider - media) > 1) return media;
+    return provider;
   }
-  return typeof providerSeconds === 'number' && Number.isFinite(providerSeconds) && providerSeconds > 0 ? Math.round(providerSeconds) : undefined;
+  return provider;
 }
 
 function localPlayback(track: Track): Playback | null {
