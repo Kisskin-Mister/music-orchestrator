@@ -88,7 +88,21 @@ class PlayerController extends ChangeNotifier {
       queueIndex >= 0 && queueIndex < queue.length ? queue[queueIndex] : null;
   bool get isPlaying => _audio.playing;
   Stream<Duration> get positionStream => _audio.positionStream;
-  Duration get duration => _audio.duration ?? Duration.zero;
+
+  /// YouTube CDN reports Content-Length for the full video+audio container,
+  /// so just_audio reports roughly 2x real duration. When the audio element
+  /// claims far more than the provider metadata, clamp to provider value.
+  static const _overreportedRatio = 1.3;
+  Duration get duration {
+    final raw = _audio.duration ?? Duration.zero;
+    final track = currentTrack;
+    if (track == null || track.durationSeconds <= 0) return raw;
+    final providerMs = track.durationSeconds * 1000;
+    if (raw.inMilliseconds > providerMs * _overreportedRatio) {
+      return Duration(milliseconds: providerMs);
+    }
+    return raw;
+  }
 
   Future<void> loadHistory() async {
     final prefs = await SharedPreferences.getInstance();

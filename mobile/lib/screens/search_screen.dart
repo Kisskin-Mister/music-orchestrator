@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/library_controller.dart';
@@ -16,19 +15,9 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final _controller = TextEditingController();
-  Timer? _debounce;
-
-  void _onChanged(String value) {
-    _debounce?.cancel();
-    _debounce = Timer(
-      const Duration(milliseconds: 350),
-      () => context.read<LibraryController>().search(value),
-    );
-  }
 
   @override
   void dispose() {
-    _debounce?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -65,7 +54,6 @@ class _SearchScreenState extends State<SearchScreen> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _controller,
-                  onChanged: _onChanged,
                   onSubmitted: (v) => library.search(v),
                   decoration: const InputDecoration(
                     hintText: 'Название, исполнитель или альбом',

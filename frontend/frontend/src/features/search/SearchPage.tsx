@@ -95,13 +95,7 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
     localStorage.setItem('mo_enabled_search_providers', JSON.stringify(selectedProviders));
   }, [selectedProviders]);
 
-  useEffect(() => {
-    if (activeView !== 'search') return;
-    const next = draft.trim();
-    if (next === query) return;
-    const timer = window.setTimeout(() => { setSearchLimit(PAGE_SIZE); setQuery(next); }, 350);
-    return () => window.clearTimeout(timer);
-  }, [draft, query, activeView]);
+  // Dynamic search removed — search only triggers on explicit form submit.
 
   useEffect(() => {
     const youtube = providers.data?.find((p) => p.id === 'youtube_stream' && p.enabled);
