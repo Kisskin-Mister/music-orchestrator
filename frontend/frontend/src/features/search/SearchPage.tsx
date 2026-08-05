@@ -138,7 +138,7 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-lime-300 text-black"><Music2 size={17} /></span>
         <span className="hidden truncate font-display text-[13px] font-bold leading-tight tracking-[-.02em] xl:inline">Orchestrator</span>
       </div>
-      <nav className="grid grid-cols-5 gap-1 lg:grid-cols-1 lg:gap-1">{NAV.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setActiveView(id)} className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 transition active:scale-[.96] lg:py-3 xl:flex-row xl:justify-start xl:gap-3 xl:px-3 xl:py-2.5 ${activeView === id ? 'bg-lime-300 text-black' : 'text-[#9aa0ad] hover:bg-white/8 hover:text-white'}`} aria-label={label} aria-current={activeView === id ? 'page' : undefined} title={label}><Icon size={20} className="shrink-0" /><span className="text-[10px] leading-none lg:hidden xl:inline xl:text-sm xl:font-medium xl:leading-none">{label}</span></button>)}</nav>
+      <nav className="grid grid-cols-5 gap-1 lg:grid-cols-1 lg:gap-1">{NAV.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setActiveView(id)} className={`flex flex-col items-center justify-center gap-1 rounded-control px-2 py-2 transition active:scale-[.96] lg:py-3 xl:flex-row xl:justify-start xl:gap-3 xl:px-3 xl:py-2.5 ${activeView === id ? 'bg-lime-300 text-black' : 'text-[#9aa0ad] hover:bg-white/8 hover:text-white'}`} aria-label={label} aria-current={activeView === id ? 'page' : undefined} title={label}><Icon size={20} className="shrink-0" /><span className="text-[11px] leading-none lg:hidden xl:inline xl:text-sm xl:font-medium xl:leading-none">{label}</span></button>)}</nav>
     </aside>
     <section className="min-w-0"><div key={activeView} className="view-enter">
       {activeView === 'library' && <LibraryView tracks={filteredLibrary} filter={libraryFilter} setFilter={setLibraryFilter} {...shared} />}
@@ -152,15 +152,20 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
   </main>;
 }
 
-function SectionHeader({ eyebrow, title, subtitle, children }: { eyebrow: string; title: string; subtitle: string; children?: ReactNode }) { return <header className="mb-8 border-b border-white/8 pb-6"><p className="mb-3 font-mono text-[11px] uppercase tracking-[.14em] text-lime-300">{eyebrow}</p><h1 className="m-0 font-display text-[2.6rem] font-extrabold leading-[0.98] tracking-[-.01em] text-balance md:text-6xl">{title}</h1><p className="mb-0 mt-3 max-w-2xl text-sm text-[#a6abb7] text-pretty md:text-base">{subtitle}</p>{children && <div className="mt-5">{children}</div>}</header>; }
-function InlineFilter({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) { return <div className="flex h-12 items-center gap-3 rounded-xl border border-white/12 bg-surface px-4 transition focus-within:border-lime-300/60"><Search size={18} className="text-[#8c919e]" /><input value={value} onChange={(e) => onChange(e.target.value)} className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#626875]" placeholder={placeholder} /></div>; }
+/* Eyebrow → title → subtitle, with the same 6/8/16px rhythm every Flutter
+   screen opens with (see mobile/lib/screens/*.dart). `subtitle` is optional
+   because Search and Playlists go straight from the title to their controls. */
+function SectionHeader({ eyebrow, title, subtitle, children }: { eyebrow: string; title: string; subtitle?: string; children?: ReactNode }) { return <header className="mb-4"><p className="t-eyebrow m-0 text-lime-300">{eyebrow}</p><h1 className="t-headline-lg m-0 mt-1.5 text-[40px] text-balance">{title}</h1>{subtitle && <p className="t-body-sm m-0 mt-2 max-w-2xl text-pretty">{subtitle}</p>}{children && <div className="mt-4">{children}</div>}</header>; }
+function InlineFilter({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) { return <div className="flex h-12 items-center gap-3 rounded-control border border-white/15 bg-surface px-4 transition focus-within:border-lime-300/60"><Search size={18} className="text-muted" /><input value={value} onChange={(e) => onChange(e.target.value)} className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-subtle" placeholder={placeholder} /></div>; }
 function SpinnerLine({ label }: { label: string }) { return <div className="flex items-center gap-2 rounded-xl bg-surface-2 p-4 text-[#9aa0ad]"><Loader2 className="animate-spin text-lime-300" size={18} /> {label}</div>; }
 /* Skeletons beat a spinner where the result shape is known: the layout stops
    jumping when data lands, and the wait reads as "this list is filling in". */
 function SkeletonBar({ className = '' }: { className?: string }) { return <span className={`block animate-pulse rounded bg-white/[0.07] ${className}`} />; }
-function TrackRowSkeleton() { return <div className="flex min-h-[76px] items-center gap-3 border-b border-white/8 px-3 py-2.5 last:border-b-0 md:px-4"><SkeletonBar className="h-13 w-13 shrink-0 rounded-xl" /><div className="min-w-0 flex-1"><SkeletonBar className="h-4 w-[62%]" /><SkeletonBar className="mt-2 h-3 w-[38%]" /></div></div>; }
-function TrackListSkeleton({ rows = 6 }: { rows?: number }) { return <div aria-hidden="true" className="overflow-hidden rounded-2xl border border-white/8 bg-surface">{Array.from({ length: rows }, (unused, i) => <TrackRowSkeleton key={i} />)}</div>; }
-function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint: string }) { return <div className="grid place-items-center gap-3 rounded-2xl border border-dashed border-white/12 px-6 py-14 text-center"><span className="grid h-14 w-14 place-items-center rounded-xl bg-surface-2 text-[#8c919e]"><Icon size={24} /></span><div><h2 className="m-0 text-lg font-semibold">{title}</h2><p className="m-0 mt-1 max-w-sm text-sm text-pretty text-[#8c919e]">{hint}</p></div></div>; }
+function TrackRowSkeleton() { return <div className="flex items-center gap-3 px-1 py-2"><SkeletonBar className="h-13 w-13 shrink-0 rounded-control" /><div className="min-w-0 flex-1"><SkeletonBar className="h-4 w-[62%]" /><SkeletonBar className="mt-2 h-3 w-[38%]" /></div></div>; }
+function TrackListSkeleton({ rows = 6 }: { rows?: number }) { return <div aria-hidden="true">{Array.from({ length: rows }, (unused, i) => <TrackRowSkeleton key={i} />)}</div>; }
+/* Flutter's empty screens are a bare centred column — 40px muted icon, title,
+   hint — with no card or dashed frame around them. */
+function EmptyState({ icon: Icon, title, hint }: { icon: LucideIcon; title: string; hint: string }) { return <div className="grid place-items-center px-8 py-14 text-center"><Icon size={40} className="text-muted" /><h2 className="t-title-lg m-0 mt-4 text-[22px]">{title}</h2><p className="t-body m-0 mt-1.5 max-w-sm text-pretty">{hint}</p></div>; }
 
 function SearchView({ draft, setDraft, submit, clearSearch, query, resultQuery, providers, selectedProviders, toggleProvider, isLoading, isFetching, isError, total, limit, more, tracks, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { draft:string; setDraft:(v:string)=>void; submit:(e:FormEvent)=>void; clearSearch:()=>void; query:string; resultQuery:string; providers:Provider[]; selectedProviders:ProviderId[]; toggleProvider:(id:ProviderId)=>void; isLoading:boolean; isFetching:boolean; isError:boolean; total:number; limit:number; more:()=>void; tracks: Track[] } & TrackSurfaceProps) {
   const trimmedDraft = draft.trim();
@@ -190,14 +195,15 @@ function SearchView({ draft, setDraft, submit, clearSearch, query, resultQuery, 
     return () => observer.disconnect();
   }, [canLoadMore, isFetching, more]);
   return <>
-    <SectionHeader eyebrow="Поиск" title="Что послушаем?" subtitle="Начни вводить название или исполнителя — результаты подтянутся сами, Enter запускает поиск сразу.">
-      <form onSubmit={submit} className="mb-3 flex h-13 items-center gap-3 rounded-xl border border-white/12 bg-surface px-4 transition focus-within:border-lime-300/60">
-        <Search size={19} className="text-[#8c919e]" />
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-[#626875]" placeholder="Название, исполнитель или альбом" />
-        {draft && <button type="button" onClick={clearSearch} aria-label="Очистить поиск" className="rounded-lg p-2 text-[#8c919e] hover:bg-white/8"><X size={17} /></button>}
-        <button type="submit" aria-label="Найти" className="rounded-lg bg-lime-300 px-3 py-2 text-sm font-medium text-black disabled:opacity-50" disabled={!draft.trim()}>{isFetching ? <Loader2 className="animate-spin" size={16} /> : 'Найти'}</button>
+    <SectionHeader eyebrow="Поиск" title="Что послушаем?">
+      <form onSubmit={submit} className="flex h-13 items-center gap-3 rounded-control border border-white/15 bg-surface px-4 transition focus-within:border-lime-300/60">
+        <Search size={19} className="text-muted" />
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-subtle" placeholder="Название, исполнитель или альбом" />
+        {draft && <button type="button" onClick={clearSearch} aria-label="Очистить поиск" className="rounded-control p-2 text-muted hover:bg-white/8"><X size={17} /></button>}
+        <button type="submit" aria-label="Найти" className="rounded-control bg-lime-300 px-3 py-2 text-sm font-medium text-black disabled:opacity-50" disabled={!draft.trim()}>{isFetching ? <Loader2 className="animate-spin" size={16} /> : 'Найти'}</button>
       </form>
-      <div className="flex flex-wrap gap-2.5">{providers.filter((p) => p.enabled).map((provider) => { const selected = selectedProviders.includes(provider.id); return <button key={provider.id} type="button" onClick={() => toggleProvider(provider.id)} aria-pressed={selected} className={`grid h-11 w-14 place-items-center rounded-xl border transition ${selected ? 'border-lime-300/60 bg-lime-300/[0.16] ring-1 ring-lime-300/40' : 'border-white/10 bg-surface opacity-45 hover:opacity-80'}`} title={providerName(provider)} aria-label={providerName(provider)}><SourceIcon id={provider.id} colored className="h-[22px] w-[22px]" /></button>; })}</div>
+      <p className="t-eyebrow m-0 mt-3">Источники</p>
+      <div className="mt-2 flex flex-wrap gap-2.5">{providers.filter((p) => p.enabled).map((provider) => { const selected = selectedProviders.includes(provider.id); return <button key={provider.id} type="button" onClick={() => toggleProvider(provider.id)} aria-pressed={selected} className={`grid h-11 w-14 place-items-center rounded-card border transition ${selected ? 'border-lime-300/60 bg-lime-300/[0.18] ring-1 ring-lime-300/40' : 'border-white/10 bg-surface-2 opacity-45 hover:opacity-80'}`} title={providerName(provider)} aria-label={providerName(provider)}><SourceIcon id={provider.id} colored className="h-[22px] w-[22px]" /></button>; })}</div>
     </SectionHeader>
     {!query && <EmptyState icon={Search} title="Найди свой трек" hint="Введи название песни, исполнителя или альбома — соберём результаты из подключённых источников." />}
     {(waitingForDebounce || showInitialSpinner) && <><span className="sr-only" role="status">Ищу треки…</span><TrackListSkeleton /></>}
@@ -229,15 +235,15 @@ function TrackRow({ track, playlists, liked, cachedJob, onLike, onPlay, onRemove
   const playNext = usePlayerStore((state) => state.playNext);
   const addToQueue = usePlayerStore((state) => state.addToQueue);
   const isCurrent = currentId === track.id;
-  return <article aria-current={isCurrent ? 'true' : undefined} className={`grid min-h-[76px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-white/8 px-3 py-2.5 transition-colors last:border-b-0 hover:bg-white/[0.03] md:px-4 ${isCurrent ? 'bg-lime-300/[0.07] hover:bg-lime-300/[0.09]' : ''}`}>
+  return <article aria-current={isCurrent ? 'true' : undefined} className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-control px-1 py-2 transition-colors ${isCurrent ? 'bg-lime-300/[0.08]' : 'hover:bg-white/[0.03]'}`}>
     <button type="button" onClick={onPlay} className="flex min-w-0 items-center gap-3 text-left outline-none ring-lime-300/70 focus-visible:ring-2">
-      <span className="group relative grid h-13 w-13 shrink-0 place-items-center overflow-hidden rounded-xl transition hover:ring-2"><TrackArt track={track} className="h-full w-full transition group-hover:scale-105" /><span className={`absolute inset-0 grid place-items-center text-white transition ${isCurrent ? 'bg-black/45 opacity-100' : 'bg-black/0 opacity-0 group-hover:bg-black/35 group-hover:opacity-100'}`}>{isCurrent ? <span className={`eq ${playerStatus === 'playing' ? '' : 'eq--paused'}`} aria-label="Сейчас играет"><span /><span /><span /></span> : <Play size={18} />}</span></span>
-      <span className="min-w-0"><span className="mb-1 flex min-w-0 items-center gap-2"><strong className="truncate">{track.title}</strong>{track.official && <ShieldCheck size={15} className="shrink-0 text-sky-300" aria-label="Official Topic" />}{downloaded && <Folder size={15} className="shrink-0 text-lime-300" aria-label="Локально" />}</span><span className="m-0 flex min-w-0 items-center gap-2 text-sm text-[#8c919e]"><SourceIcon id={track.provider_id} className="h-4 w-4 shrink-0" /><span className="truncate">{track.artist || 'Исполнитель не указан'}</span><span className="shrink-0 tabular-nums">· {formatDuration(liveDuration ?? track.duration_seconds)}</span></span>{job?.error && <span className="m-0 mt-1 block text-xs text-red-200">{job.error}</span>}</span>
+      <span className="group relative grid h-13 w-13 shrink-0 place-items-center overflow-hidden rounded-control transition hover:ring-2"><TrackArt track={track} className="h-full w-full transition group-hover:scale-105" /><span className={`absolute inset-0 grid place-items-center text-white transition ${isCurrent ? 'bg-black/45 opacity-100' : 'bg-black/0 opacity-0 group-hover:bg-black/35 group-hover:opacity-100'}`}>{isCurrent ? <span className={`eq ${playerStatus === 'playing' ? '' : 'eq--paused'}`} aria-label="Сейчас играет"><span /><span /><span /></span> : <Play size={18} />}</span></span>
+      <span className="min-w-0"><span className="flex min-w-0 items-center gap-2"><strong className="truncate font-semibold">{track.title}</strong>{track.official && <ShieldCheck size={15} className="shrink-0 text-sky-300" aria-label="Official Topic" />}{downloaded && <Folder size={15} className="shrink-0 text-lime-300" aria-label="Локально" />}</span><span className="t-body-sm m-0 mt-[3px] flex min-w-0 items-center gap-[5px]"><SourceIcon id={track.provider_id} className="h-[15px] w-[15px] shrink-0" /><span className="truncate">{track.artist || 'Исполнитель не указан'}</span><span className="shrink-0 font-mono text-xs tabular-nums">· {formatDuration(liveDuration ?? track.duration_seconds)}</span></span>{job?.error && <span className="m-0 mt-1 block text-xs text-red-200">{job.error}</span>}</span>
     </button>
     <div className="relative flex gap-1">
-      <button aria-label={liked ? 'Убрать лайк' : 'Поставить лайк'} onClick={onLike} className={`grid h-10 w-10 place-items-center rounded-lg hover:bg-white/8 ${liked ? 'text-red-300' : ''}`}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></button>
-      <button aria-label="Действия" onClick={() => setMenuOpen((v) => !v)} aria-haspopup="menu" aria-expanded={menuOpen} className="grid h-10 w-10 place-items-center rounded-lg hover:bg-white/8"><MoreHorizontal size={19} /></button>
-      {menuOpen && <><button type="button" aria-label="Закрыть меню" tabIndex={-1} onClick={() => setMenuOpen(false)} className="fixed inset-0 z-30 cursor-default" /><div role="menu" onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false); }} className="absolute right-0 top-10 z-40 w-64 overflow-hidden rounded-xl border border-white/10 bg-surface-3 p-1 shadow-2xl shadow-black/50">
+      <button aria-label={liked ? 'Убрать лайк' : 'Поставить лайк'} onClick={onLike} className={`grid h-11 w-11 place-items-center rounded-full transition hover:bg-white/8 ${liked ? 'text-danger' : 'text-muted'}`}><Heart size={20} fill={liked ? 'currentColor' : 'none'} /></button>
+      <button aria-label="Действия" onClick={() => setMenuOpen((v) => !v)} aria-haspopup="menu" aria-expanded={menuOpen} className="grid h-11 w-11 place-items-center rounded-full text-muted transition hover:bg-white/8"><MoreHorizontal size={20} /></button>
+      {menuOpen && <><button type="button" aria-label="Закрыть меню" tabIndex={-1} onClick={() => setMenuOpen(false)} className="fixed inset-0 z-30 cursor-default" /><div role="menu" onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false); }} className="absolute right-0 top-11 z-40 w-64 overflow-hidden rounded-xl border border-white/10 bg-surface-3 p-1 shadow-2xl shadow-black/50">
         {/* Order mirrors the mobile sheet: queue actions, then collection, then
             downloads, with anything destructive last and coloured — so a
             removal never sits where a routine action was a moment ago. */}
@@ -259,25 +265,28 @@ function TrackRow({ track, playlists, liked, cachedJob, onLike, onPlay, onRemove
   </article>;
 }
 
-function TrackList({ tracks, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { tracks: Track[] } & TrackSurfaceProps) { return <div className="overflow-hidden rounded-2xl border border-white/8 bg-surface">{tracks.map((track, index) => <div key={track.id} className="stagger-in" style={{ '--stagger-index': Math.min(index, 10) } as CSSProperties}><TrackRow track={track} playlists={playlists} liked={favoriteIDs.has(track.id)} cachedJob={downloadedByTrack.get(track.id)} onLike={() => onLike(track)} onPlay={() => onPlay(track, tracks, index)} /></div>)}</div>; }
+/* Rows sit straight on the page background with no card or separators, the way
+   Flutter's SliverList does — the rounded current-track highlight only reads as
+   a pill when nothing is drawn between rows. */
+function TrackList({ tracks, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { tracks: Track[] } & TrackSurfaceProps) { return <div>{tracks.map((track, index) => <div key={track.id} className="stagger-in" style={{ '--stagger-index': Math.min(index, 10) } as CSSProperties}><TrackRow track={track} playlists={playlists} liked={favoriteIDs.has(track.id)} cachedJob={downloadedByTrack.get(track.id)} onLike={() => onLike(track)} onPlay={() => onPlay(track, tracks, index)} /></div>)}</div>; }
 function CoverStrip({ eyebrow, tracks, onPlay }: { eyebrow: string; tracks: Track[]; onPlay: (track: Track, list: Track[], index: number) => void }) {
   if (!tracks.length) return null;
-  return <section className="mb-8">
-    <p className="mb-3 font-mono text-[11px] uppercase tracking-[.12em] text-[#8c919e]">{eyebrow}</p>
-    <div className="no-scrollbar -mx-1 flex gap-4 overflow-x-auto px-1 pb-1">
-      {tracks.slice(0, 12).map((track, index) => <button key={track.id} type="button" onClick={() => onPlay(track, tracks, index)} className="stagger-in group w-[148px] shrink-0 text-left" style={{ '--stagger-index': index } as CSSProperties}>
-        <span className="relative block aspect-square overflow-hidden rounded-2xl shadow-[0_14px_34px_rgba(0,0,0,.4)] transition group-hover:-translate-y-1">
+  return <section className="mb-4">
+    <p className="t-eyebrow m-0 mb-2.5 pl-1">{eyebrow}</p>
+    <div className="no-scrollbar -mx-1 flex gap-[14px] overflow-x-auto px-1 pb-1">
+      {tracks.slice(0, 12).map((track, index) => <button key={track.id} type="button" onClick={() => onPlay(track, tracks, index)} className="stagger-in group w-[140px] shrink-0 text-left" style={{ '--stagger-index': index } as CSSProperties}>
+        <span className="relative block h-[140px] w-[140px] overflow-hidden rounded-card shadow-[0_14px_34px_rgba(0,0,0,.4)] transition group-hover:-translate-y-1">
           <TrackArt track={track} className="h-full w-full transition group-hover:scale-105" />
           <span className="absolute inset-0 grid place-items-center bg-black/0 opacity-0 transition group-hover:bg-black/35 group-hover:opacity-100"><span className="grid h-11 w-11 place-items-center rounded-full bg-lime-300 text-black"><Play size={18} /></span></span>
         </span>
-        <strong className="mt-2 block truncate text-sm">{track.title}</strong>
-        <small className="block truncate text-xs text-[#8c919e]">{track.artist || 'Исполнитель не указан'}</small>
+        <strong className="mt-2 block truncate text-[13px] font-semibold">{track.title}</strong>
+        <span className="mt-0.5 flex items-center gap-1 text-xs text-muted"><SourceIcon id={track.provider_id} className="h-[13px] w-[13px] shrink-0" /><span className="truncate">{track.artist || 'Исполнитель не указан'}</span></span>
       </button>)}
     </div>
   </section>;
 }
 function LibraryView({ tracks, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { tracks: Track[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { return <><SectionHeader eyebrow="Коллекция" title="Медиатека" subtitle="Всё, что ты лайкнул или скачал, — в одном месте."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в медиатеке" /></SectionHeader>{tracks.length ? <><CoverStrip eyebrow="Слушай снова" tracks={tracks} onPlay={onPlay} /><TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /></> : <EmptyState icon={Heart} title="Пока пусто" hint="Лайкни трек или скачай его — и он появится здесь." />}</>; }
-function DownloadsView({ jobs, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { jobs: Job[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { const tracks = filterTracks(jobs.map((job) => { const track = trackFromJob(job); return track ? { ...track, downloaded: true, download_media_url: getMediaURL(job) ?? track.download_media_url } : null; }).filter(Boolean) as Track[], filter); return <><SectionHeader eyebrow="Offline" title="Загрузки" subtitle="Треки, сохранённые на устройство, — слушай без сети."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в загрузках" /></SectionHeader>{tracks.length ? <TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /> : <EmptyState icon={Download} title="Пока ничего не скачано" hint="Скачанные треки появятся здесь — открой меню трека и выбери «Скачать mp3»." />}</>; }
+function DownloadsView({ jobs, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { jobs: Job[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { const tracks = filterTracks(jobs.map((job) => { const track = trackFromJob(job); return track ? { ...track, downloaded: true, download_media_url: getMediaURL(job) ?? track.download_media_url } : null; }).filter(Boolean) as Track[], filter); return <><SectionHeader eyebrow="Offline" title="Загрузки" subtitle="Лежат на сервере — нужен доступ к нему, чтобы слушать."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в загрузках" /></SectionHeader>{tracks.length ? <TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /> : <EmptyState icon={Download} title="На сервере ничего нет" hint="Скачай трек на сервер, чтобы не зависеть от YouTube и SoundCloud." />}</>; }
 
 function PlaylistsView({ playlists, libraryTracks, favoriteIDs, downloadedByTrack, onLike, onPlay, creating, setCreating }: TrackSurfaceProps & { libraryTracks: Track[]; creating: boolean; setCreating: (v: boolean) => void }) {
   const createPlaylist = useCreatePlaylist();
@@ -297,9 +306,7 @@ function PlaylistsView({ playlists, libraryTracks, favoriteIDs, downloadedByTrac
     resetCreateForm();
   };
   return <>
-    <SectionHeader eyebrow="Коллекции" title="Плейлисты" subtitle="Собирай подборки под настроение: название, описание и треки выбираются сразу при создании.">
-
-    </SectionHeader>
+    <SectionHeader eyebrow="Коллекции" title="Плейлисты" />
     {creating && <form onSubmit={create} className="mb-8 overflow-hidden rounded-2xl border border-white/10 bg-surface">
       <div className="border-b border-white/8 p-5">
         <div className="flex items-start justify-between gap-3"><div><p className="m-0 font-mono text-[11px] uppercase tracking-[.12em] text-lime-300">Новый плейлист</p><h2 className="m-0 mt-1 font-display text-2xl font-bold tracking-[-.01em]">Создать подборку</h2><p className="m-0 mt-1 text-sm text-[#a6abb7]">Сначала опиши вайб, потом выбери треки из медиатеки.</p></div><button type="button" onClick={resetCreateForm} aria-label="Закрыть создание плейлиста" className="rounded-lg p-2 text-[#a6abb7] hover:bg-white/8"><X size={19} /></button></div>
@@ -478,29 +485,31 @@ function SettingsView({ providers, riskyEnabled, selectedProviders, toggleProvid
   };
   return <>
     <SectionHeader eyebrow="Профиль и backend" title="Настройки" subtitle="Аккаунт, источники и подключение к серверу." />
-    <section className="mb-8">
-      <p className="mb-1 font-mono text-[11px] uppercase tracking-[.12em] text-lime-300">Внешний вид</p>
-      <p className="m-0 mb-4 text-sm text-[#a6abb7]">Акцентный цвет применяется сразу везде — к кнопкам, плееру и активным состояниям.</p>
-      <div className="flex flex-wrap items-center gap-3">
-        {ACCENT_PRESETS.map((preset) => <button key={preset.hex} type="button" onClick={() => chooseAccent(preset.hex)} aria-label={preset.name} aria-pressed={accent === preset.hex} title={preset.name} className={`h-10 w-10 shrink-0 rounded-full border-2 transition ${accent === preset.hex ? 'border-white scale-110' : 'border-white/15 hover:scale-105'}`} style={{ background: preset.hex }} />)}
-        <label className="grid h-10 w-10 shrink-0 cursor-pointer place-items-center rounded-full border-2 border-dashed border-white/25 text-[#a6abb7] hover:border-white/50" title="Свой цвет">
+    {/* Flutter separates every settings block with Divider(height: 40) — 20px of
+        air on each side of the rule. `settings-section` is that, minus the rule
+        on the first block. */}
+    <section className="settings-section settings-section--first">
+      <p className="t-eyebrow m-0 text-lime-300">Внешний вид</p>
+      <p className="t-body-sm m-0 mt-2 mb-4">Акцентный цвет применяется сразу везде — к кнопкам, плееру и активным состояниям.</p>
+      <div className="flex flex-wrap items-center gap-[14px]">
+        {ACCENT_PRESETS.map((preset) => <button key={preset.hex} type="button" onClick={() => chooseAccent(preset.hex)} aria-label={preset.name} aria-pressed={accent === preset.hex} title={preset.name} className={`h-11 w-11 shrink-0 rounded-full border-2 transition ${accent === preset.hex ? 'border-white scale-105' : 'border-white/25 hover:scale-105'}`} style={{ background: preset.hex }} />)}
+        <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-full border-2 border-dashed border-white/25 text-muted hover:border-white/50" title="Свой цвет">
           <input type="color" value={accent} onChange={(e) => chooseAccent(e.target.value)} className="sr-only" aria-label="Свой акцентный цвет" />
           <Pencil size={15} />
         </label>
       </div>
     </section>
-    {(onLogout || localMode) && <section className="mb-8 border-t border-white/8 pt-8">
-      <p className="mb-1 font-mono text-[11px] uppercase tracking-[.12em] text-lime-300">Аккаунт</p>
+    {(onLogout || localMode) && <section className="settings-section">
+      <p className="t-eyebrow m-0 mb-2 text-lime-300">Аккаунт</p>
       <div className="flex flex-wrap items-center justify-between gap-3"><p className="m-0 text-sm text-[#a6abb7]">{localMode ? 'Локальный режим: без аккаунта, данные живут на этом устройстве.' : `${session.data?.username ?? 'Аккаунт'} · ${session.data?.role === 'admin' ? 'администратор' : 'пользователь'}`}</p>{localMode ? <button type="button" onClick={onLeaveLocalMode} className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm text-[#c6cad3] transition hover:bg-white/8 active:scale-[0.98]"><LogOut size={16} /> Вернуться к экрану входа</button> : <button type="button" onClick={onLogout} className="inline-flex items-center gap-2 rounded-xl border border-red-300/30 px-4 py-3 text-sm text-red-100 transition hover:bg-red-300/10 active:scale-[0.98]"><LogOut size={16} /> Выйти</button>}</div>
       {!localMode && session.data?.role === 'admin' && <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <form onSubmit={saveAccount} className="rounded-2xl border border-white/10 bg-surface p-4"><h3 className="m-0 text-lg">Данные владельца</h3><p className="m-0 mt-1 text-sm text-[#8c919e]">Роль владельца: администратор.</p><div className="mt-4 grid gap-3"><input value={accountName} onChange={(e) => setAccountName(e.target.value)} className="rounded-xl border border-white/10 bg-surface-2 px-4 py-3 outline-none" placeholder="Логин" /><input type="password" value={accountPassword} onChange={(e) => setAccountPassword(e.target.value)} className="rounded-xl border border-white/10 bg-surface-2 px-4 py-3 outline-none" placeholder="Новый пароль — минимум 10 символов" /><button type="submit" disabled={!accountName.trim() || updateAccount.isPending} className="rounded-xl bg-lime-300 px-4 py-3 font-medium text-black disabled:opacity-50">Сохранить аккаунт</button>{accountStatus && <p className="m-0 text-sm text-lime-200">{accountStatus}</p>}</div></form>
         <section className="rounded-2xl border border-white/10 bg-surface p-4"><h3 className="m-0 text-lg">Пользователи</h3><p className="m-0 mt-1 text-sm text-[#8c919e]">Новые пользователи получают роль «пользователь» и не видят админ-раздел.</p><form onSubmit={addUser} className="mt-4 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"><input value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className="rounded-xl border border-white/10 bg-surface-2 px-4 py-3 outline-none" placeholder="Логин" /><input type="password" value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className="rounded-xl border border-white/10 bg-surface-2 px-4 py-3 outline-none" placeholder="Пароль" /><button disabled={!newUserName.trim() || newUserPassword.length < 10 || createUser.isPending} className="rounded-xl bg-lime-300 px-4 py-3 font-medium text-black disabled:opacity-50">Добавить</button></form><div className="mt-4 grid gap-2">{users.data?.map((user) => <UserRow key={user.id} user={user} onSave={(patch) => updateUser.mutate({ userId: user.id, patch })} onDelete={() => deleteUser.mutate(user.id)} />)}{!users.data?.length && <p className="m-0 rounded-xl border border-white/10 bg-surface-2 p-3 text-sm text-[#8c919e]">Пользователей пока нет.</p>}</div></section>
       </div>}
     </section>}
-    <section className="mb-8 border-t border-white/8 pt-8">
-      <p className="mb-1 font-mono text-[11px] uppercase tracking-[.12em] text-lime-300">Источники поиска</p>
-      <h3 className="m-0 font-display text-xl font-bold tracking-[-.01em]">Где искать музыку</h3>
-      <p className="m-0 mt-1 text-sm text-[#8c919e]">Включи нужные источники — поиск сразу использует этот выбор.</p>
+    <section className="settings-section">
+      <p className="t-eyebrow m-0 text-lime-300">Источники поиска</p>
+      <p className="t-body-sm m-0 mt-2">Где искать музыку — включи нужные источники.</p>
       <div className="mt-4 grid gap-3 md:grid-cols-2">{providers.filter((p) => p.capabilities.search || p.id === 'local').map((p) => {
         const selected = selectedProviders.includes(p.id);
         const disabled = !p.enabled || !p.capabilities.search;
@@ -511,8 +520,8 @@ function SettingsView({ providers, riskyEnabled, selectedProviders, toggleProvid
       })}</div>
     </section>
     {session.data?.role === 'admin' && <ServerSettingsSection />}
-    <details className="mb-5 border-t border-white/8 pt-8 text-sm text-[#a6abb7]">
-      <summary className="cursor-pointer select-none font-mono text-[11px] uppercase tracking-[.12em] text-[#8c919e]">Подключение к серверу</summary>
+    <details className="settings-section text-sm text-[#a6abb7]">
+      <summary className="t-eyebrow cursor-pointer select-none">Подключение к серверу</summary>
       <label className="mt-4 block text-sm text-[#a6abb7]" htmlFor="backend-url">Адрес API</label>
       <div className="mt-2 flex flex-col gap-2 md:flex-row">
         <input id="backend-url" value={backendDraft} onChange={(event) => setBackendDraft(event.target.value)} placeholder="Пусто = текущий домен" className="min-w-0 flex-1 rounded-xl border border-white/10 bg-surface-2 px-4 py-3 outline-none" />
@@ -548,7 +557,7 @@ function MiniPlayerTitle({ text }: { text: string }) {
     window.addEventListener('resize', measure);
     return () => { ro?.disconnect(); window.removeEventListener('resize', measure); };
   }, [text]);
-  return <div ref={outerRef} className={`player-marquee text-sm font-semibold md:text-base ${overflowing ? 'player-marquee--animate' : ''}`}><span ref={innerRef}>{text}</span></div>;
+  return <div ref={outerRef} className={`player-marquee text-[13px] font-semibold md:text-sm ${overflowing ? 'player-marquee--animate' : ''}`}><span ref={innerRef}>{text}</span></div>;
 }
 
 function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Set<string>; downloadedByTrack: Map<string | undefined, Job>; onLike: (track: Track) => void }) {
@@ -742,12 +751,18 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
     <input data-player-control="true" className="range seek-control__input h-3 touch-pan-x disabled:opacity-50" type="range" min={0} max={duration || 0} step="1" value={seekValue} disabled={!canSeek} onPointerDown={(event) => { event.stopPropagation(); beginSeek(); }} onPointerUp={(event) => { event.stopPropagation(); commitSeek(); }} onPointerCancel={(event) => { event.stopPropagation(); seekingRef.current = false; setIsSeeking(false); }} onTouchStart={(event) => event.stopPropagation()} onTouchEnd={(event) => { event.stopPropagation(); commitSeek(); }} onMouseUp={(event) => { event.stopPropagation(); commitSeek(); }} onKeyUp={(event) => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') commitSeek(); }} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSeekDraft(Number(event.currentTarget.value))} aria-label={canSeek ? 'Перемотка' : 'Перемотка недоступна, трек ещё грузится'} />
   </div>;
 
+  /* The audio element lives outside the collapsed/expanded branch: mounting it
+     inside the mini player meant expanding to the full player tore it down and
+     `autoPlay` restarted the track from zero. */
+  const audio = playback?.stream_url ? <audio ref={audioRef} className="hidden" src={playback.stream_url} autoPlay loop={repeat === 'one'} onTimeUpdate={(e) => { if (!isSeeking) setCurrentTime(e.currentTarget.currentTime); updateBuffered(e.currentTarget); advanceIfTrackEnded(e.currentTarget); }} onProgress={(e) => updateBuffered(e.currentTarget)} onLoadedMetadata={(e) => { e.currentTarget.volume = volume; updateBuffered(e.currentTarget); updateDuration(e.currentTarget.duration); }} onDurationChange={(e) => updateDuration(e.currentTarget.duration)} onWaiting={() => setStatus('buffering')} onCanPlay={(e) => { updateBuffered(e.currentTarget); if (status === 'buffering') setStatus('playing'); }} onPlay={() => setStatus('playing')} onPause={() => { if (status !== 'playing') setStatus('paused'); }} onEnded={next} /> : null;
+
   return <>
-    {!expanded && (<footer onClick={openFromShell} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className={`player-morph-card touch-pan-y fixed inset-x-2 bottom-[calc(84px+env(safe-area-inset-bottom,0px))] z-20 mx-auto max-w-5xl cursor-pointer rounded-2xl border border-white/12 bg-surface-2/95 p-2 shadow-[0_16px_48px_rgba(0,0,0,.4)] backdrop-blur md:bottom-2 md:grid md:grid-cols-[minmax(0,1fr)_minmax(300px,560px)] md:gap-3 md:p-3 lg:inset-x-0 lg:bottom-0 lg:z-40 lg:max-w-none lg:grid-cols-[minmax(220px,1fr)_minmax(360px,640px)] lg:items-center lg:justify-between lg:gap-6 lg:rounded-none lg:border-x-0 lg:border-b-0 lg:bg-surface-2 lg:px-6 lg:py-3 ${miniEntered ? '' : 'player-mini--enter'}`}>
+    {audio}
+    {!expanded && (<footer onClick={openFromShell} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className={`player-morph-card touch-pan-y fixed inset-x-3 bottom-[calc(84px+env(safe-area-inset-bottom,0px))] z-20 mx-auto max-w-5xl cursor-pointer rounded-card border border-white/12 bg-surface-2 p-2 shadow-[0_8px_24px_rgba(0,0,0,.45)] md:bottom-2 md:grid md:grid-cols-[minmax(0,1fr)_minmax(300px,560px)] md:gap-3 md:p-3 lg:inset-x-0 lg:bottom-0 lg:z-40 lg:max-w-none lg:grid-cols-[minmax(220px,1fr)_minmax(360px,640px)] lg:items-center lg:justify-between lg:gap-6 lg:rounded-none lg:border-x-0 lg:border-b-0 lg:px-6 lg:py-3 ${miniEntered ? '' : 'player-mini--enter'}`}>
       {error && <div role="alert" className="col-span-full mb-2 flex items-center justify-between gap-3 rounded-2xl border border-red-300/30 bg-red-300/10 px-3 py-2 text-sm text-red-100"><span className="min-w-0 truncate">{error}</span><button type="button" onClick={() => setError(null)} className="rounded-xl p-1 hover:bg-white/10" aria-label="Скрыть ошибку"><X size={16} /></button></div>}
-      <div className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-2 md:flex md:min-w-0 md:gap-3">
-        <button data-player-control="true" aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="relative grid h-13 w-13 shrink-0 place-items-center overflow-hidden rounded-2xl"><TrackArt track={currentTrack} className="h-full w-full" /><span className="absolute inset-0 grid place-items-center bg-black/30 text-white">{query.isFetching ? <Loader2 className="animate-spin" size={17} /> : status === 'playing' ? <Pause size={17} /> : <Play size={17} />}</span></button>
-        <button type="button" data-open-player="true" onClick={openPlayer} className="min-w-0 overflow-hidden text-left" aria-label="Открыть плеер"><MiniPlayerTitle text={`${currentTrack.title} — ${currentTrack.artist ?? 'Исполнитель не указан'}`} /><div className="mt-1 flex items-center gap-2 text-xs text-[#8c919e]"><SourceIcon id={currentTrack.provider_id} className="h-4 w-4" /><span className="truncate">{currentTrack.artist ?? 'Выбери трек'}</span></div></button>
+      <div className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-2.5 md:flex md:min-w-0 md:gap-3">
+        <span className="relative grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-control"><TrackArt track={currentTrack} className="h-full w-full" /></span>
+        <button type="button" data-open-player="true" onClick={openPlayer} className="min-w-0 overflow-hidden text-left" aria-label="Открыть плеер"><MiniPlayerTitle text={`${currentTrack.title} — ${currentTrack.artist ?? 'Исполнитель не указан'}`} /><div className="mt-0.5 flex items-center gap-1 text-xs text-muted"><SourceIcon id={currentTrack.provider_id} className="h-[13px] w-[13px] shrink-0" /><span className="truncate">{currentTrack.artist ?? 'Выбери трек'}</span></div></button>
         <div data-player-control="true" className="relative flex items-center gap-1 justify-self-end md:hidden">
           <button aria-label="Меню плеера" aria-haspopup="menu" aria-expanded={miniMenuOpen} onClick={() => setMiniMenuOpen((value) => !value)} className={`${actionClass} ${shuffle || activeRepeat || liked || downloaded ? 'text-lime-200' : ''}`}><MoreHorizontal size={17} /></button>
           {miniMenuOpen && <><button type="button" aria-label="Закрыть меню плеера" tabIndex={-1} onClick={() => setMiniMenuOpen(false)} className="fixed inset-0 z-30 cursor-default" /><div role="menu" className="absolute right-0 bottom-11 z-40 w-64 overflow-hidden rounded-xl border border-white/10 bg-surface-3 p-1 shadow-2xl shadow-black/50">
@@ -759,46 +774,52 @@ function PlayerBar({ favoriteIDs, downloadedByTrack, onLike }: { favoriteIDs: Se
             <button role="menuitem" aria-pressed={activeRepeat} onClick={() => { cycleRepeat(); setMiniMenuOpen(false); }} className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-white/8 ${activeRepeat ? 'text-lime-300' : ''}`}>{repeat === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />} Повтор: {repeat === 'off' ? 'выкл' : repeat === 'all' ? 'всё' : 'один'}</button>
             <button role="menuitem" onClick={() => { setMiniMenuOpen(false); openPlayer(); }} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm hover:bg-white/8"><Music2 size={16} /> Открыть плеер</button>
           </div></>}
+          <button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-9 w-9 place-items-center rounded-full text-lime-300">{query.isFetching ? <Loader2 className="animate-spin" size={26} /> : status === 'playing' ? <Pause size={26} fill="currentColor" /> : <Play size={26} fill="currentColor" />}</button>
         </div>
         <div data-player-control="true" className="hidden gap-2 md:flex"><button aria-label={liked ? 'Убрать лайк' : 'Поставить лайк'} onClick={() => onLike(currentTrack)} className={`grid h-11 w-11 place-items-center rounded-2xl border border-white/10 hover:bg-white/8 ${liked ? 'text-red-300' : 'text-[#a6abb7]'}`}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></button><button aria-label={downloaded ? 'Уже скачано' : 'Скачать'} disabled={!currentTrack.policy.download_allowed || downloaded || createDownload.isPending} onClick={download} className={`grid h-11 w-11 place-items-center rounded-2xl border border-white/10 hover:bg-white/8 disabled:opacity-50 ${downloaded ? 'text-lime-300' : 'text-[#a6abb7]'}`}>{createDownload.isPending ? <Loader2 className="animate-spin" size={18} /> : downloaded ? <Folder size={18} /> : <Download size={18} />}</button></div>
       </div>
-      <div data-player-control="true" className="mt-2 grid min-w-0 gap-2 md:mt-0"><div className="hidden items-center justify-center gap-2 md:flex"><button aria-label="Shuffle" onClick={toggleShuffle} className={`rounded-xl p-2 ${shuffle ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}><Shuffle size={17} /></button><button aria-label="Previous" onClick={previous} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipBack size={18} /></button><button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-10 w-10 place-items-center rounded-full bg-lime-300 text-black shadow-lg shadow-lime-300/20">{query.isFetching ? <Loader2 className="animate-spin" size={19} /> : status === 'playing' ? <Pause size={19} /> : <Play size={19} />}</button><button aria-label="Next" onClick={next} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipForward size={18} /></button><button aria-label="Repeat" onClick={cycleRepeat} className={`rounded-xl p-2 ${activeRepeat ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}>{repeat === 'one' ? <Repeat1 size={17} /> : <Repeat size={17} />}</button><input className="range max-w-24" type="range" min={0} max={1} step={0.01} value={volume} onChange={(event) => setVolume(Number(event.currentTarget.value))} aria-label="Громкость" /></div><div className="grid grid-cols-[42px_1fr_42px] items-center gap-2 text-[11px] text-[#8c919e]"><span>{formatDuration(seekValue)}</span>{range}<span>{formatDuration(duration)}</span></div>{playback?.stream_url && <audio ref={audioRef} className="hidden" src={playback.stream_url} autoPlay loop={repeat === 'one'} onTimeUpdate={(e) => { if (!isSeeking) setCurrentTime(e.currentTarget.currentTime); updateBuffered(e.currentTarget); advanceIfTrackEnded(e.currentTarget); }} onProgress={(e) => updateBuffered(e.currentTarget)} onLoadedMetadata={(e) => { e.currentTarget.volume = volume; updateBuffered(e.currentTarget); updateDuration(e.currentTarget.duration); }} onDurationChange={(e) => updateDuration(e.currentTarget.duration)} onWaiting={() => setStatus('buffering')} onCanPlay={(e) => { updateBuffered(e.currentTarget); if (status === 'buffering') setStatus('playing'); }} onPlay={() => setStatus('playing')} onPause={() => { if (status !== 'playing') setStatus('paused'); }} onEnded={next} />}</div>
+      {/* Flutter's mini player carries a hairline progress bar and nothing else;
+          the scrubber and transport are the full player's job. Desktop keeps
+          them because there is room and no full-screen player to fall back to. */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-2 bottom-1.5 h-[3px] overflow-hidden rounded-full bg-white/10 md:hidden"><span className="block h-full rounded-full bg-lime-300" style={{ width: `${progress}%` }} /></div>
+      <div data-player-control="true" className="mt-2 hidden min-w-0 gap-2 md:mt-0 md:grid"><div className="hidden items-center justify-center gap-2 md:flex"><button aria-label="Shuffle" onClick={toggleShuffle} className={`rounded-xl p-2 ${shuffle ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}><Shuffle size={17} /></button><button aria-label="Previous" onClick={previous} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipBack size={18} /></button><button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-10 w-10 place-items-center rounded-full bg-lime-300 text-black shadow-lg shadow-lime-300/20">{query.isFetching ? <Loader2 className="animate-spin" size={19} /> : status === 'playing' ? <Pause size={19} /> : <Play size={19} />}</button><button aria-label="Next" onClick={next} className="rounded-xl p-2 text-[#a6abb7] hover:bg-white/8"><SkipForward size={18} /></button><button aria-label="Repeat" onClick={cycleRepeat} className={`rounded-xl p-2 ${activeRepeat ? 'bg-lime-300 text-black' : 'hover:bg-white/8 text-[#a6abb7]'}`}>{repeat === 'one' ? <Repeat1 size={17} /> : <Repeat size={17} />}</button><input className="range max-w-24" type="range" min={0} max={1} step={0.01} value={volume} onChange={(event) => setVolume(Number(event.currentTarget.value))} aria-label="Громкость" /></div><div className="grid grid-cols-[42px_1fr_42px] items-center gap-2 font-mono text-[11px] text-muted"><span>{formatDuration(seekValue)}</span>{range}<span>{formatDuration(duration)}</span></div></div>
     </footer>)}
     {expanded && <div className={`player-sheet-backdrop fixed inset-0 z-50 grid place-items-end bg-black/70 p-0 backdrop-blur md:place-items-center md:p-3 lg:place-items-stretch lg:justify-items-end lg:bg-black/40 lg:p-0 ${sheetClosing ? 'player-sheet-backdrop--closing' : ''}`} role="dialog" aria-modal="true" aria-label="Плеер" onClick={closePlayer}>
-      <section onClick={(event) => event.stopPropagation()} onTouchStart={onSheetTouchStart} onTouchMove={onSheetTouchMove} onTouchEnd={onSheetTouchEnd} style={sheetOffset > 0 ? { transform: `translateY(${sheetOffset}px)`, transition: 'none' } : { transition: 'transform 320ms cubic-bezier(.22,1,.36,1)' }} data-player-panel="true" className={`player-sheet player-morph-card max-h-[92dvh] w-full overflow-hidden rounded-t-[2rem] border border-white/10 bg-[#101217] shadow-2xl md:max-w-md md:rounded-[2rem] lg:h-full lg:max-h-none lg:w-[420px] lg:max-w-none lg:rounded-none lg:rounded-l-[1.75rem] lg:border-y-0 lg:border-r-0 ${sheetClosing ? 'player-sheet--closing' : ''}`}>
-        <div data-sheet-handle="true" className="mx-auto flex h-7 w-28 cursor-grab items-start justify-center pt-2 md:hidden" aria-hidden="true"><div className="h-1.5 w-12 rounded-full bg-white/25" /></div>
-        <div className="max-h-[92dvh] touch-pan-y overflow-y-auto overscroll-contain p-5 pt-3">
-          <div className="mb-4 flex items-center justify-between">
-            <button onClick={closePlayer} aria-label="Закрыть плеер" className="rounded-2xl p-2 text-[#a6abb7] hover:bg-white/8"><X size={20} /></button>
-            <div className="flex gap-2">
-              <button aria-label="Shuffle" aria-pressed={shuffle} onClick={toggleShuffle} className={`rounded-2xl p-3 ${shuffle ? 'bg-lime-300 text-black' : 'bg-white/6 text-[#a6abb7]'}`}><Shuffle size={18} /></button>
-              <button aria-label="Repeat" aria-pressed={activeRepeat} onClick={cycleRepeat} className={`rounded-2xl p-3 ${activeRepeat ? 'bg-lime-300 text-black' : 'bg-white/6 text-[#a6abb7]'}`}>{repeat === 'one' ? <Repeat1 size={18} /> : <Repeat size={18} />}</button>
-            </div>
+      <section onClick={(event) => event.stopPropagation()} onTouchStart={onSheetTouchStart} onTouchMove={onSheetTouchMove} onTouchEnd={onSheetTouchEnd} style={sheetOffset > 0 ? { transform: `translateY(${sheetOffset}px)`, transition: 'none' } : { transition: 'transform 320ms cubic-bezier(.22,1,.36,1)' }} data-player-panel="true" className={`player-sheet player-morph-card max-h-[92dvh] w-full overflow-hidden rounded-t-sheet border border-white/10 bg-surface shadow-2xl md:max-w-md md:rounded-sheet lg:h-full lg:max-h-none lg:w-[420px] lg:max-w-none lg:rounded-none lg:rounded-l-sheet lg:border-y-0 lg:border-r-0 ${sheetClosing ? 'player-sheet--closing' : ''}`}>
+        {/* Order and spacing follow NowPlayingSheet: handle → art → title →
+            progress → times → actions → transport → queue. */}
+        <div className="max-h-[92dvh] touch-pan-y overflow-y-auto overscroll-contain px-5 pt-3 pb-8">
+          <div data-sheet-handle="true" className="relative flex h-6 cursor-grab items-center justify-center">
+            <span className="h-[5px] w-11 rounded-full bg-white/25" aria-hidden="true" />
+            <button onClick={closePlayer} aria-label="Закрыть плеер" className="absolute right-0 grid h-9 w-9 place-items-center rounded-full text-muted transition hover:bg-white/8"><X size={20} /></button>
           </div>
-          <div className="mx-auto mb-5 aspect-square max-w-[70vw] overflow-hidden rounded-[2rem] shadow-2xl shadow-black/35 md:max-w-72"><TrackArt track={currentTrack} className="h-full w-full" /></div>
-          <h2 className="m-0 truncate font-display text-2xl font-bold tracking-[-.01em]">{currentTrack.title}</h2>
-          <p className="m-0 mt-1 flex items-center gap-2 text-[#9aa0ad]"><SourceIcon id={currentTrack.provider_id} className="h-4 w-4" />{currentTrack.artist ?? 'Исполнитель не указан'}</p>
-          <div className="mt-5 grid grid-cols-[42px_1fr_42px] items-center gap-2 text-[11px] text-[#8c919e]"><span>{formatDuration(seekValue)}</span>{range}<span>{formatDuration(duration)}</span></div>
-          <div className="mt-2 flex items-center justify-between text-[11px] text-[#8c919e]"><span>{status === 'buffering' ? 'Буферизую…' : 'Поток'}</span><span aria-label={`Загружено ${formatDuration(bufferedTime)}`}>Загружено {formatDuration(bufferedTime)} · {bufferProgress.toFixed(0)}%</span></div>
-          <div className="mt-6 flex items-center justify-center gap-4">
-            <button aria-label="Previous" onClick={previous} className="rounded-2xl bg-white/6 p-4 text-[#a6abb7]"><SkipBack size={24} /></button>
-            <button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-16 w-16 place-items-center rounded-full bg-lime-300 text-black shadow-lg shadow-lime-300/20">{query.isFetching ? <Loader2 className="animate-spin" size={24} /> : status === 'playing' ? <Pause size={24} /> : <Play size={24} />}</button>
-            <button aria-label="Next" onClick={next} className="rounded-2xl bg-white/6 p-4 text-[#a6abb7]"><SkipForward size={24} /></button>
+          <div className="mt-6 aspect-square w-full overflow-hidden rounded-card shadow-2xl shadow-black/35"><TrackArt track={currentTrack} className="h-full w-full" /></div>
+          <h2 className="t-headline-md m-0 mt-6 truncate text-2xl">{currentTrack.title}</h2>
+          <p className="t-body m-0 mt-1 flex items-center gap-2 text-muted"><SourceIcon id={currentTrack.provider_id} className="h-4 w-4 shrink-0" /><span className="truncate">{currentTrack.artist ?? 'Исполнитель не указан'}</span></p>
+          <div className="mt-6">{range}</div>
+          <div className="mt-2 flex items-center justify-between font-mono text-xs text-muted"><span>{formatDuration(seekValue)}</span><span>{formatDuration(duration)}</span></div>
+          {status === 'buffering' && <p className="m-0 mt-2 text-center text-xs text-muted">Буферизую… загружено {formatDuration(bufferedTime)} · {bufferProgress.toFixed(0)}%</p>}
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button aria-label={liked ? 'Убрать лайк' : 'Поставить лайк'} aria-pressed={liked} onClick={() => onLike(currentTrack)} className={`grid h-12 w-12 place-items-center rounded-full border transition ${liked ? 'border-danger/45 bg-danger/15 text-danger' : 'border-white/10 text-muted hover:bg-white/8'}`}><Heart size={21} fill={liked ? 'currentColor' : 'none'} /></button>
+            <button aria-label={downloaded ? 'Уже скачано' : 'Скачать'} disabled={!currentTrack.policy.download_allowed || downloaded || createDownload.isPending} onClick={download} className={`grid h-12 w-12 place-items-center rounded-full border transition disabled:opacity-50 ${downloaded ? 'border-lime-300/45 bg-lime-300/15 text-lime-300' : 'border-white/10 text-muted hover:bg-white/8'}`}>{createDownload.isPending ? <Loader2 className="animate-spin" size={21} /> : downloaded ? <Folder size={21} /> : <Download size={21} />}</button>
+            <button aria-label="Shuffle" aria-pressed={shuffle} onClick={toggleShuffle} className={`grid h-12 w-12 place-items-center rounded-full border transition ${shuffle ? 'border-lime-300/45 bg-lime-300/15 text-lime-300' : 'border-white/10 text-muted hover:bg-white/8'}`}><Shuffle size={21} /></button>
+            <button aria-label="Repeat" aria-pressed={activeRepeat} onClick={cycleRepeat} className={`grid h-12 w-12 place-items-center rounded-full border transition ${activeRepeat ? 'border-lime-300/45 bg-lime-300/15 text-lime-300' : 'border-white/10 text-muted hover:bg-white/8'}`}>{repeat === 'one' ? <Repeat1 size={21} /> : <Repeat size={21} />}</button>
           </div>
-          <div className="mt-5 flex items-center justify-center gap-2">
-            <button aria-label={liked ? 'Убрать лайк' : 'Поставить лайк'} onClick={() => onLike(currentTrack)} className={`rounded-2xl border border-white/10 p-3 ${liked ? 'text-red-300' : 'text-[#a6abb7]'}`}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></button>
-            <button aria-label={downloaded ? 'Уже скачано' : 'Скачать'} disabled={!currentTrack.policy.download_allowed || downloaded || createDownload.isPending} onClick={download} className={`rounded-2xl border border-white/10 p-3 disabled:opacity-50 ${downloaded ? 'text-lime-300' : 'text-[#a6abb7]'}`}>{createDownload.isPending ? <Loader2 className="animate-spin" size={18} /> : downloaded ? <Folder size={18} /> : <Download size={18} />}</button>
+          <div className="mt-6 flex items-center justify-center gap-6">
+            <button aria-label="Previous" onClick={previous} className="grid h-12 w-12 place-items-center rounded-full text-muted transition hover:bg-white/8"><SkipBack size={30} /></button>
+            <button aria-label={status === 'playing' ? 'Pause' : 'Play'} onClick={playPause} className="grid h-16 w-16 place-items-center rounded-full bg-lime-300 text-black shadow-lg shadow-lime-300/20">{query.isFetching ? <Loader2 className="animate-spin" size={30} /> : status === 'playing' ? <Pause size={30} /> : <Play size={30} />}</button>
+            <button aria-label="Next" onClick={next} className="grid h-12 w-12 place-items-center rounded-full text-muted transition hover:bg-white/8"><SkipForward size={30} /></button>
           </div>
-          <section className="mt-6 rounded-2xl border border-white/10 bg-surface-2 p-3">
-            <div className="mb-2 flex items-center justify-between px-1"><h3 className="m-0 text-sm font-semibold">Дальше в очереди</h3><span className="text-xs text-[#8c919e]">{queueIndex + 1}/{queue.length || 1}</span></div>
+          {queue.length > 1 && <section className="mt-8">
+            <div className="mb-2 flex items-center justify-between px-1"><h3 className="t-eyebrow m-0">Дальше в очереди</h3><span className="font-mono text-xs text-muted">{queueIndex + 1}/{queue.length}</span></div>
             <div className="grid max-h-52 gap-1 overflow-y-auto overscroll-contain pr-1">
-              {queue.map((track, index) => <button key={`${track.id}-${index}`} type="button" onClick={() => playQueue(queue, index)} className={`grid grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2 rounded-2xl px-2 py-2 text-left ${index === queueIndex ? 'bg-lime-300/15 text-lime-100' : 'hover:bg-white/8'}`}>
-                <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-xl"><TrackArt track={track} className="h-full w-full" /></span>
-                <span className="min-w-0"><strong className="block truncate text-sm">{track.title}</strong><small className="block truncate text-[#8c919e]">{track.artist ?? 'Исполнитель не указан'}</small></span>
-                {index === queueIndex && <span className="eq" aria-label="Сейчас играет"><span /><span /><span /></span>}
+              {queue.map((track, index) => <button key={`${track.id}-${index}`} type="button" onClick={() => playQueue(queue, index)} className={`grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-1 py-2 text-left ${index === queueIndex ? 'bg-lime-300/[0.08]' : 'hover:bg-white/[0.03]'}`}>
+                <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-control"><TrackArt track={track} className="h-full w-full" /></span>
+                <span className="min-w-0"><strong className="block truncate text-[13px] font-semibold">{track.title}</strong><span className="t-body-sm block truncate">{track.artist ?? 'Исполнитель не указан'}</span></span>
+                {index === queueIndex && <span className="eq text-lime-300" aria-label="Сейчас играет"><span /><span /><span /></span>}
               </button>)}
             </div>
-          </section>
+          </section>}
         </div>
       </section>
     </div>}
@@ -829,14 +850,13 @@ function ServerSettingsSection() {
     }
   };
 
-  if (settings.isLoading) return <section className="mb-8 border-t border-white/8 pt-8"><SpinnerLine label="Загружаю настройки сервера…" /></section>;
+  if (settings.isLoading) return <section className="settings-section"><SpinnerLine label="Загружаю настройки сервера…" /></section>;
   if (!data) return null;
   const dirty = Object.keys(draft).length > 0;
 
-  return <section className="mb-8 border-t border-white/8 pt-8">
-    <p className="mb-1 font-mono text-[11px] uppercase tracking-[.12em] text-lime-300">Сервер</p>
-    <h3 className="m-0 text-xl font-semibold">Настройки сервера</h3>
-    <p className="m-0 mt-1 text-sm text-[#8c919e]">Меняются на лету и переживают перезапуск — правку <code className="font-mono text-xs">.env</code> они не требуют.</p>
+  return <section className="settings-section">
+    <p className="t-eyebrow m-0 text-lime-300">Сервер</p>
+    <p className="t-body-sm m-0 mt-2">Меняются на лету и переживают перезапуск — правку <code className="font-mono text-xs">.env</code> они не требуют.</p>
 
     <div className="mt-5 grid gap-3">
       <label className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-surface p-4">

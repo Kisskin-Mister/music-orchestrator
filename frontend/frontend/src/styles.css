@@ -9,15 +9,21 @@
 @font-face{font-family:"JetBrains Mono Var";src:url("/fonts/jbmono-cyrillic.woff2") format("woff2");font-weight:400 700;font-style:normal;font-display:swap;unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
 @font-face{font-family:"JetBrains Mono Var";src:url("/fonts/jbmono-latin.woff2") format("woff2");font-weight:400 700;font-style:normal;font-display:swap}
 
+/* Palette, radii and fonts are the canonical set shared with the Flutter client.
+   Keep in sync with mobile/lib/theme/tokens.dart (AppColors/AppRadius/AppFonts). */
 :root{
-  color-scheme:dark;font-family:"Geist","SF Pro Text",ui-sans-serif,system-ui,sans-serif;background:#08090c;color:#f6f3ea;
+  color-scheme:dark;font-family:"SF Pro Text","Geist",ui-sans-serif,system-ui,sans-serif;background:#08090c;color:#f6f3ea;
   /* --accent-raw is whatever the user picked (preset or custom); --accent clamps it to a
      fixed lightness/chroma so text-black stays readable on it no matter which hue is chosen.
      See src/lib/theme.ts for how this gets set. */
   --accent-raw:#b8f545;
   --accent:oklch(from var(--accent-raw) 82% 0.16 h);
   --accent-glow:oklch(from var(--accent-raw) 82% 0.16 h / 18%);
-  --surface:#0f1117;--surface-2:#151923;--surface-3:#1c212c;--border:rgba(255,255,255,.10);--muted:#8c919e;
+  --bg:#08090c;--surface:#0f1117;--surface-2:#151923;--surface-3:#1c212c;
+  --fg:#f6f3ea;--muted:#8c919e;--subtle:#626875;--danger:#eb777c;
+  --border:rgba(255,255,255,.10);--border-strong:rgba(255,255,255,.15);
+  /* --radius-control/card/sheet are declared in @theme below — Tailwind emits
+     them onto :root from there, so var(--radius-*) works app-wide too. */
   --font-display:"Unbounded Var","Unbounded",ui-sans-serif,system-ui,sans-serif;
   --font-mono:"JetBrains Mono Var","JetBrains Mono",ui-monospace,SFMono-Regular,monospace;
 }
@@ -33,10 +39,32 @@
   --color-surface:var(--surface);
   --color-surface-2:var(--surface-2);
   --color-surface-3:var(--surface-3);
+  --color-muted:var(--muted);
+  --color-subtle:var(--subtle);
+  --color-danger:var(--danger);
+  --radius-control:10px;
+  --radius-card:16px;
+  --radius-sheet:28px;
   --font-mono:var(--font-mono);
   --font-display:var(--font-display);
 }
-*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(circle at 50% -12%,var(--accent-glow),transparent 40rem),radial-gradient(circle at 100% 10%,rgba(255,255,255,.035),transparent 30rem),#08090c}button,input{font:inherit}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+/* Flutter runs with NoSplash.splashFactory and a transparent highlightColor;
+   the tap flash is the web's equivalent ripple, so it goes too. */
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(circle at 50% -12%,var(--accent-glow),transparent 40rem),radial-gradient(circle at 100% 10%,rgba(255,255,255,.035),transparent 30rem),#08090c}button,input{font:inherit}:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+/* Flutter's textTheme, ported 1:1 (mobile/lib/theme/app_theme.dart). Named
+   after the Flutter styles so a change on either side is easy to mirror. */
+.t-eyebrow{font-family:var(--font-mono);font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted)}
+.t-headline-lg{font-family:var(--font-display);font-weight:800;letter-spacing:-.5px;line-height:1;color:var(--fg)}
+.t-headline-md{font-family:var(--font-display);font-weight:700;letter-spacing:-.3px;color:var(--fg)}
+.t-title-lg{font-family:var(--font-display);font-weight:700;letter-spacing:-.2px;color:var(--fg)}
+.t-body{font-size:15px;line-height:1.4;color:var(--fg)}
+.t-body-sm{font-size:13px;color:var(--muted)}
+
+/* Flutter's Divider(height: 40) between settings blocks: a hairline with 20px
+   of air either side. The first block in the list gets the air but no rule. */
+.settings-section{margin-top:20px;padding-top:20px;border-top:1px solid var(--border)}
+.settings-section--first{padding-top:0;border-top:0}
 .player-marquee{display:block;overflow:hidden;white-space:nowrap}.player-marquee>span{display:inline-block;max-width:100%;vertical-align:bottom}.player-marquee--animate>span{max-width:none;min-width:100%;padding-right:2rem;animation:player-marquee 14s linear infinite}@media (min-width:768px){.player-marquee--animate>span{animation:none}}@keyframes player-marquee{0%,18%{transform:translateX(0)}100%{transform:translateX(-55%)}}
 
 .stagger-in{animation:stagger-in 420ms cubic-bezier(.22,.9,.24,1) both;animation-delay:calc(var(--stagger-index,0) * 35ms)}@keyframes stagger-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
