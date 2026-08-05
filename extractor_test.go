@@ -22,7 +22,7 @@ func TestSoundcloudFallbackURL(t *testing.T) {
 
 func TestStreamSourceCacheServesWithinTTL(t *testing.T) {
 	e := NewExtractor(Config{})
-	e.cacheStream("youtube_stream:abc", "https://cdn.example/a", map[string]string{"User-Agent": "x"})
+	e.cacheStream("youtube_stream:abc", StreamTarget{URL: "https://cdn.example/a", Headers: map[string]string{"User-Agent": "x"}})
 	url, headers, err := e.StreamSource("youtube_stream", "abc")
 	if err != nil {
 		t.Fatalf("cached entry should be returned without invoking yt-dlp: %v", err)

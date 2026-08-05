@@ -22,9 +22,34 @@ import (
 const streamCacheTTL = 60 * time.Second
 
 type streamCacheEntry struct {
-	url     string
-	headers map[string]string
+	target  StreamTarget
 	expires time.Time
+}
+
+// StreamTarget is one resolved audio source plus what the stream handler needs
+// to decide how to serve it. SoundCloud dropped progressive downloads: every
+// format it offers today is an HLS playlist, which no <audio> element outside
+// Safari can play and which has no byte length to range over. Carrying the
+// protocol and codec here is what lets the handler pick the proxy path for a
+// plain file and the remux path for a playlist.
+type StreamTarget struct {
+	URL     string
+	Headers map[string]string
+	HLS     bool
+	ACodec  string
+	Ext     string
+}
+
+// isHLS is true for a manifest rather than a file. yt-dlp names the protocol
+// m3u8/m3u8_native, but a bare URL check covers formats that report none.
+func isHLS(protocol, rawURL string) bool {
+	if strings.HasPrefix(protocol, "m3u8") {
+		return true
+	}
+	if before, _, _ := strings.Cut(rawURL, "?"); strings.HasSuffix(before, ".m3u8") {
+		return true
+	}
+	return false
 }
 
 type Extractor struct {
@@ -165,46 +190,63 @@ func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
 // that negotiated them, so replacing the User-Agent with our own can turn a
 // working link into a 403.
 func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]string, error) {
+	target, err := e.StreamTarget(providerID, pid)
+	if err != nil {
+		return "", nil, err
+	}
+	return target.URL, target.Headers, nil
+}
+
+// StreamTarget resolves the audio source and reports how it is packaged.
+func (e *Extractor) StreamTarget(providerID, pid string) (StreamTarget, error) {
 	cacheKey := providerID + ":" + pid
 	if cached, ok := e.streamCache.Load(cacheKey); ok {
 		if entry, ok := cached.(streamCacheEntry); ok {
 			if time.Now().Before(entry.expires) {
-				return entry.url, entry.headers, nil
+				return entry.target, nil
 			}
 			e.streamCache.Delete(cacheKey)
 		}
 	}
 	u, err := e.urlFor(providerID, pid)
 	if err != nil {
-		return "", nil, err
+		return StreamTarget{}, err
 	}
 	info, err := e.dump(u, e.cfg.ExtractorTimeout, false)
 	if err != nil {
-		return "", nil, err
+		return StreamTarget{}, err
 	}
 	if info.URL != "" {
-		return e.cacheStream(cacheKey, info.URL, info.HTTPHeaders), info.HTTPHeaders, nil
+		return e.cacheStream(cacheKey, StreamTarget{URL: info.URL, Headers: info.HTTPHeaders, HLS: isHLS("", info.URL)}), nil
 	}
 	formats := info.Formats
 	sort.SliceStable(formats, func(i, j int) bool { return scoreFormat(formats[i]) > scoreFormat(formats[j]) })
 	for _, f := range formats {
 		if f.URL != "" && f.VCodec == "none" && f.ACodec != "none" {
-			headers := headersOr(f.HTTPHeaders, info.HTTPHeaders)
-			return e.cacheStream(cacheKey, f.URL, headers), headers, nil
+			return e.cacheStream(cacheKey, targetFor(f, info)), nil
 		}
 	}
 	for _, f := range formats {
 		if f.URL != "" && f.ACodec != "none" {
-			headers := headersOr(f.HTTPHeaders, info.HTTPHeaders)
-			return e.cacheStream(cacheKey, f.URL, headers), headers, nil
+			return e.cacheStream(cacheKey, targetFor(f, info)), nil
 		}
 	}
-	return "", nil, fmt.Errorf("no playable audio URL")
+	return StreamTarget{}, fmt.Errorf("no playable audio URL")
 }
 
-func (e *Extractor) cacheStream(cacheKey, url string, headers map[string]string) string {
-	e.streamCache.Store(cacheKey, streamCacheEntry{url: url, headers: headers, expires: time.Now().Add(streamCacheTTL)})
-	return url
+func targetFor(f ytdlpFormat, info ytdlpInfo) StreamTarget {
+	return StreamTarget{
+		URL:     f.URL,
+		Headers: headersOr(f.HTTPHeaders, info.HTTPHeaders),
+		HLS:     isHLS(f.Protocol, f.URL),
+		ACodec:  f.ACodec,
+		Ext:     f.Ext,
+	}
+}
+
+func (e *Extractor) cacheStream(cacheKey string, target StreamTarget) StreamTarget {
+	e.streamCache.Store(cacheKey, streamCacheEntry{target: target, expires: time.Now().Add(streamCacheTTL)})
+	return target
 }
 
 func headersOr(primary, fallback map[string]string) map[string]string {

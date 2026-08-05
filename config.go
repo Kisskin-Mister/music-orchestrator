@@ -20,6 +20,7 @@ type Config struct {
 	PublicMediaBaseURL    string
 	EnableRiskyExtractors bool
 	YTDLPBinary           string
+	FFmpegBinary          string
 	ExtractorTimeout      time.Duration
 	DownloadTimeout       time.Duration
 	YouTubeAPIKey         string
@@ -42,6 +43,7 @@ func LoadConfig() Config {
 		PublicMediaBaseURL:    strings.TrimRight(env("APP_PUBLIC_MEDIA_BASE_URL", ""), "/"),
 		EnableRiskyExtractors: envBool("APP_ENABLE_RISKY_EXTRACTORS", false),
 		YTDLPBinary:           env("APP_YT_DLP_BINARY", "yt-dlp"),
+		FFmpegBinary:          env("APP_FFMPEG_BINARY", "ffmpeg"),
 		ExtractorTimeout:      time.Duration(envInt("APP_EXTRACTOR_TIMEOUT_SECONDS", 30)) * time.Second,
 		DownloadTimeout:       time.Duration(envInt("APP_DOWNLOAD_TIMEOUT_SECONDS", 600)) * time.Second,
 		YouTubeAPIKey:         env("APP_YOUTUBE_API_KEY", ""),

@@ -28,6 +28,7 @@ type App struct {
 	store     *Store
 	providers *ProviderService
 	sessions  *sessionStore
+	hls       *hlsCache
 	mux       *http.ServeMux
 }
 
@@ -40,7 +41,7 @@ func NewApp(cfg Config) (*App, error) {
 		return nil, err
 	}
 	effective := st.StoredSettings().apply(cfg)
-	a := &App{cfg: effective, baseCfg: cfg, store: st, providers: NewProviderService(effective), sessions: newSessionStore(), mux: http.NewServeMux()}
+	a := &App{cfg: effective, baseCfg: cfg, store: st, providers: NewProviderService(effective), sessions: newSessionStore(), hls: newHLSCache(effective), mux: http.NewServeMux()}
 	a.routes()
 	return a, nil
 }
@@ -440,14 +441,20 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target, upstreamHeaders, err := a.providers.extractor.StreamSource(providerID, pid)
+	target, err := a.providers.extractor.StreamTarget(providerID, pid)
 	if err != nil {
 		slog.Warn("stream resolve failed", "track", id, "error", err)
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
-	total, contentType, err := a.probeUpstream(r.Context(), target, upstreamHeaders)
+	if target.HLS {
+		trackID := providerID + ":" + pid
+		a.serveHLS(w, r, trackID, target)
+		return
+	}
+
+	total, contentType, err := a.probeUpstream(r.Context(), target.URL, target.Headers)
 	if err != nil {
 		slog.Warn("stream probe failed", "track", id, "error", err)
 		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
@@ -485,7 +492,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		if chunkEnd > end {
 			chunkEnd = end
 		}
-		n, err := a.copyRange(r.Context(), w, target, upstreamHeaders, offset, chunkEnd)
+		n, err := a.copyRange(r.Context(), w, target.URL, target.Headers, offset, chunkEnd)
 		if n > 0 && flusher != nil {
 			flusher.Flush()
 		}
