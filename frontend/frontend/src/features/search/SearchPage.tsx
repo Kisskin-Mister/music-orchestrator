@@ -532,6 +532,10 @@ function SettingsView({ providers, riskyEnabled, selectedProviders, toggleProvid
       <p className="m-0 mt-2 text-xs text-[#8c919e]">По умолчанию: {defaultBackend}. Настройка хранится в этом браузере.</p>
       {backendStatus && <p className="m-0 mt-3 rounded-xl border border-white/10 bg-surface-2 px-3 py-2 text-sm text-[#d7dbe4]">{backendStatus}</p>}
     </details>
+    <div className="mt-8 flex items-center justify-center gap-2 text-xs text-[#626875]">
+      <span className="inline-block h-4 w-4 rounded bg-lime-300/20 text-center text-[10px] font-bold leading-4 text-lime-300">O</span>
+      <span>Music Orchestrator v{__APP_VERSION__}</span>
+    </div>
   </>;
 }
 
