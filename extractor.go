@@ -167,7 +167,12 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, bool, 
 	if providerID == "soundcloud_stream" {
 		spec = "scsearch" + fmt.Sprint(searchLimit) + ":" + query
 	}
-	info, err := e.dump(spec, e.cfg.ExtractorTimeout, providerID == "youtube_stream")
+	// Both searches run flat. Without it yt-dlp resolves stream formats for every
+	// hit, which is slow and — on SoundCloud — fatal: one DRM-protected track in
+	// the result set fails the whole scsearch with exit code 1, so the listener
+	// gets no results at all. Flat entries carry the permalink and id, which is
+	// everything toTrack needs; formats are resolved later, per played track.
+	info, err := e.dump(spec, e.cfg.ExtractorTimeout, providerID == "youtube_stream" || providerID == "soundcloud_stream", "")
 	if err != nil {
 		slog.Warn("yt-dlp search failed", "provider", providerID, "error", err)
 		return nil, false, err
@@ -294,7 +299,7 @@ func (e *Extractor) Resolve(providerID, pid string) (Track, error) {
 	if err != nil {
 		return Track{}, err
 	}
-	info, err := e.dump(u, e.cfg.ExtractorTimeout, false)
+	info, err := e.dump(u, e.cfg.ExtractorTimeout, false, "")
 	if err != nil {
 		return Track{}, err
 	}
@@ -359,7 +364,7 @@ func (e *Extractor) resolveStream(providerID, pid, cacheKey string) (StreamTarge
 	if err != nil {
 		return StreamTarget{}, err
 	}
-	info, err := e.dump(u, e.cfg.ExtractorTimeout, false)
+	info, err := e.dump(u, e.cfg.ExtractorTimeout, false, formatSpec(providerID))
 	if err != nil {
 		return StreamTarget{}, err
 	}
@@ -550,12 +555,36 @@ func (e *Extractor) jsRuntimeArgs() []string {
 	return []string{"--js-runtimes", rt}
 }
 
-func (e *Extractor) dump(spec string, timeoutDur time.Duration, flatPlaylist bool) (ytdlpInfo, error) {
+// soundcloudFormat names the transcodings to ask for by id. SoundCloud renamed
+// them: what used to be http_mp3_128/hls_mp3_128 is now http_mp3_0_0/hls_mp3_0_0
+// for the full track and http_mp3_0_1/hls_mp3_0_1 for the 30-second DRM
+// preview, so yt-dlp's own selection finds nothing under the old names. HTTP
+// comes before HLS because a progressive URL streams through the proxy without
+// a remux, and full before preview so a preview is only ever a last resort.
+// bestaudio closes the chain: a track that publishes only AAC (hls_aac_96k) has
+// none of these ids, and without a fallback --format turns that into a hard
+// "Requested format is not available" instead of a playable stream.
+const soundcloudFormat = "http_mp3_0_0/hls_mp3_0_0/http_mp3_0_1/hls_mp3_0_1/bestaudio"
+
+// formatSpec is the --format argument for a provider's stream resolve, empty
+// for providers that are better served by yt-dlp's default selection. Only the
+// stream path passes one; metadata dumps must not fail on format availability.
+func formatSpec(providerID string) string {
+	if providerID == "soundcloud_stream" {
+		return soundcloudFormat
+	}
+	return ""
+}
+
+func (e *Extractor) dump(spec string, timeoutDur time.Duration, flatPlaylist bool, format string) (ytdlpInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDur)
 	defer cancel()
 	args := append([]string{"--no-update", "--retries", "1", "--socket-timeout", "20"}, e.jsRuntimeArgs()...)
 	if flatPlaylist {
 		args = append(args, "--flat-playlist")
+	}
+	if format != "" {
+		args = append(args, "--format", format)
 	}
 	args = append(args, "--dump-single-json", "--skip-download", spec)
 	cmd := exec.CommandContext(ctx, e.cfg.YTDLPBinary, args...)
