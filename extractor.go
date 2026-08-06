@@ -33,8 +33,8 @@ type streamCacheEntry struct {
 // every page re-runs the query from the top. Caching the result set per
 // provider+query makes a repeated query instant, which is what a listener
 // typing, backing out and re-searching actually does. Five minutes is long
-// enough to cover that loop and short enough that a later search is fresh.
-const searchCacheTTL = 300 * time.Second
+// enough to cover that loop — users rarely need sub-day freshness on search.
+const searchCacheTTL = 24 * time.Hour
 
 // searchCacheMaxEntries bounds the map so a long-lived process cannot grow it
 // without limit. Expired entries are swept first; the cap only bites when a
