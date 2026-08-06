@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 import 'api/api_client.dart';
+import 'services/music_audio_handler.dart';
 import 'screens/login_screen.dart';
 import 'screens/shell.dart';
 import 'state/accent_controller.dart';
@@ -27,12 +29,18 @@ String get _apiBaseUrl {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // One AudioPlayer for the whole app: the media session wraps the same
+  // instance the player controller drives, so lock-screen state and in-app
+  // state can never drift apart.
+  final audioPlayer = AudioPlayer();
+  final audioHandler = await initMusicAudioHandler(audioPlayer);
   final api = ApiClient(baseUrl: _apiBaseUrl, apiKey: _apiKey);
   await api.loadPersistedSettings();
   final accent = AccentController()..load();
   final auth = AuthController(api)..refresh();
   final offline = OfflineController(api);
-  final player = PlayerController(api)..loadHistory();
+  final player = PlayerController(api, audio: audioPlayer, audioHandler: audioHandler)
+    ..loadHistory();
   // The player prefers a device-local file when one exists; giving it the
   // offline index here keeps that lookup out of the widget tree.
   player.offline = offline;

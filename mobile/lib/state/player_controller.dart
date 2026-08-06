@@ -6,6 +6,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
+import '../services/music_audio_handler.dart';
 import 'offline_controller.dart';
 
 enum PlayerRepeatMode { off, all, one }
@@ -14,7 +15,13 @@ enum PlayerRepeatMode { off, all, one }
 /// stream-resolving part of PlayerBar in SearchPage.tsx, backed by just_audio
 /// instead of an <audio> element.
 class PlayerController extends ChangeNotifier {
-  PlayerController(this._api) {
+  PlayerController(this._api, {AudioPlayer? audio, this.audioHandler})
+    : _audio = audio ?? AudioPlayer() {
+    // Lock-screen / notification skips must run through the queue, not through
+    // just_audio, so the handler delegates them back here.
+    audioHandler
+      ?..skipToNextCallback = next
+      ..skipToPreviousCallback = previous;
     // just_audio flips play/pause and buffering state asynchronously, so the UI
     // must follow the player's own stream — not only our post-await guesses,
     // otherwise the mini-player keeps showing "play" while audio is running.
@@ -38,7 +45,11 @@ class PlayerController extends ChangeNotifier {
     );
   }
   final ApiClient _api;
-  final AudioPlayer _audio = AudioPlayer();
+  final AudioPlayer _audio;
+
+  /// Media session bridge (see main.dart). Null where the platform has none —
+  /// playback then works exactly as before, without system metadata.
+  final MusicAudioHandler? audioHandler;
 
   /// Set once at startup (see main.dart). Lets playback prefer a device-local
   /// file without the player owning the offline index itself.
@@ -252,11 +263,10 @@ class PlayerController extends ChangeNotifier {
       if (devicePath == null && streamURL == null) {
         error = 'Источник недоступен для этого трека';
       } else {
-        if (devicePath != null) {
-          await _audio.setFilePath(devicePath);
-        } else {
-          await _audio.setUrl(streamURL!);
-        }
+        final loaded = devicePath != null
+            ? await _audio.setFilePath(devicePath)
+            : await _audio.setUrl(streamURL!);
+        _publishMediaItem(track, loaded);
         await _remember(track);
         // Not awaited: play() only completes when playback *finishes*, so
         // awaiting it here would block the whole resolve path until the end
@@ -269,6 +279,25 @@ class PlayerController extends ChangeNotifier {
       isBuffering = false;
       notifyListeners();
     }
+  }
+
+  /// Feeds the lock screen / notification with the track that just loaded. The
+  /// duration goes through the same correction as the UI so the system scrubber
+  /// doesn't inherit YouTube's doubled Content-Length.
+  void _publishMediaItem(Track track, Duration? loaded) {
+    final handler = audioHandler;
+    if (handler == null) return;
+    handler.setMediaItem(
+      id: track.id,
+      title: track.title,
+      artist: track.artist,
+      artUri: _api.artworkUrl(track.artworkUrl),
+      duration: loaded == null
+          ? (track.durationSeconds == null || track.durationSeconds! <= 0
+                ? null
+                : Duration(seconds: track.durationSeconds!))
+          : correctedDuration(loaded, track.durationSeconds),
+    );
   }
 
   String _playbackError(Object error) {
