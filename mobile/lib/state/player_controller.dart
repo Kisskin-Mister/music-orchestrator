@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../services/music_audio_handler.dart';
+import '../services/web_media_session_stub.dart'
+    if (dart.library.js_util) '../services/web_media_session.dart';
 import 'offline_controller.dart';
 
 enum PlayerRepeatMode { off, all, one }
@@ -22,6 +24,15 @@ class PlayerController extends ChangeNotifier {
     audioHandler
       ?..skipToNextCallback = next
       ..skipToPreviousCallback = previous;
+    // Web fallback: browser MediaSession API (audio_service returns null on web)
+    if (WebMediaSession.isSupported) {
+      WebMediaSession.setActions(
+        onPlay: () => togglePlayPause(),
+        onPause: () => _audio.pause(),
+        onPrev: () => previous(),
+        onNext: () => next(),
+      );
+    }
     // just_audio flips play/pause and buffering state asynchronously, so the UI
     // must follow the player's own stream — not only our post-await guesses,
     // otherwise the mini-player keeps showing "play" while audio is running.
@@ -298,6 +309,20 @@ class PlayerController extends ChangeNotifier {
                 : Duration(seconds: track.durationSeconds!))
           : correctedDuration(loaded, track.durationSeconds),
     );
+    // Also set web MediaSession metadata (browser lock screen / PIP)
+    if (WebMediaSession.isSupported) {
+      final dur = loaded == null
+          ? (track.durationSeconds == null || track.durationSeconds! <= 0
+                ? null
+                : Duration(seconds: track.durationSeconds!))
+          : correctedDuration(loaded, track.durationSeconds);
+      WebMediaSession.setMetadata(
+        title: track.title,
+        artist: track.artist,
+        artworkUrl: _api.artworkUrl(track.artworkUrl),
+        duration: dur,
+      );
+    }
   }
 
   String _playbackError(Object error) {

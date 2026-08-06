@@ -91,17 +91,34 @@ func (p *ProviderService) Search(query string, providerIDs []string, limit int) 
 	for _, m := range mores {
 		more = more || m
 	}
-	out := []Track{}
-	for _, items := range results {
-		if limit > 0 && len(out) >= limit {
-			// A provider's results never got merged in, so there is more.
-			more = true
+	// Interleave results from each provider instead of appending them in
+	// provider order.  A YouTube-only first page pushes SoundCloud off screen;
+	// round-robin gives every provider visible representation.
+	out := make([]Track, 0, limit)
+	for i := 0; limit <= 0 || len(out) < limit; i++ {
+		added := false
+		for _, items := range results {
+			if i < len(items) {
+				out = append(out, items[i])
+				added = true
+				if limit > 0 && len(out) >= limit {
+					break
+				}
+			}
+		}
+		if !added {
 			break
 		}
-		out = append(out, items...)
 	}
-	if limit > 0 && len(out) > limit {
-		return out[:limit], true
+	// Any provider that had more results than we consumed means there's more.
+	for i, items := range results {
+		if len(items) > limit && i < len(mores) {
+			mores[i] = true
+		}
+	}
+	more = false
+	for _, m := range mores {
+		more = more || m
 	}
 	return out, more
 }
