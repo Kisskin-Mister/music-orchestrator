@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -274,12 +275,18 @@ func TestStreamHLSProgressive(t *testing.T) {
 
 // hlsStreamApp resolves to an m3u8 playlist, which sends the stream handler
 // down the remux path with the given ffmpeg standing in for a real one.
+//
+// The playlist URL answers 404, so the native downloader declines it at once
+// and ffmpeg gets the job — which is the path these tests are about.
 func hlsStreamApp(t *testing.T, ffmpeg string) *App {
 	t.Helper()
 	dir := t.TempDir()
+	playlist := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(playlist.Close)
 	bin := filepath.Join(dir, "yt-dlp-hls-mock")
 	script := "#!/usr/bin/env bash\nset -e\ncat <<'JSON'\n" +
-		`{"id":"yt1","title":"Mock","duration":200,"formats":[{"url":"https://cdn.example/playlist.m3u8","protocol":"m3u8_native","acodec":"mp3","ext":"mp3","vcodec":"none","abr":128}]}` +
+		`{"id":"yt1","title":"Mock","duration":200,"formats":[{"url":"` + playlist.URL + "/playlist.m3u8" +
+		`","protocol":"m3u8_native","acodec":"mp3","ext":"mp3","vcodec":"none","abr":128}]}` +
 		"\nJSON\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -302,6 +309,130 @@ func hlsStreamApp(t *testing.T, ffmpeg string) *App {
 		t.Fatal(err)
 	}
 	return app
+}
+
+// Warm-on-play is the only thing standing between the client pressing play and
+// a round trip to the CDN. For a plain file it fetches the head of the track,
+// and the stream request that follows must play it instead of asking again.
+func TestWarmStreamPrefetchesFirstChunk(t *testing.T) {
+	body := payload(512 << 10) // smaller than one prefetch chunk
+	var requests int32
+	cdn := throttlingCDN(t, body, &requests)
+	defer cdn.Close()
+
+	app := streamApp(t, cdn.URL)
+	app.warmStream("youtube_stream", "yt1")
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("warm-up made %d upstream requests, want 1", got)
+	}
+
+	rec := httptest.NewRecorder()
+	streamThrough(t, app, rec, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !bytesEqual(rec.Body.Bytes(), body) {
+		t.Fatal("the prefetched chunk did not reach the listener intact")
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("upstream was asked %d times — the stream did not use the prefetched chunk", got)
+	}
+	if got, want := rec.Header().Get("Content-Length"), fmt.Sprint(len(body)); got != want {
+		t.Fatalf("Content-Length = %q, want %q", got, want)
+	}
+}
+
+// A prefetch only covers the head of the file. The rest is fetched as usual,
+// and the seam between the two has to be exact.
+func TestWarmStreamPrefetchIsFollowedByTheRest(t *testing.T) {
+	body := payload(3 << 20) // larger than one prefetch chunk
+	var requests int32
+	cdn := throttlingCDN(t, body, &requests)
+	defer cdn.Close()
+
+	app := streamApp(t, cdn.URL)
+	app.warmStream("youtube_stream", "yt1")
+
+	rec := httptest.NewRecorder()
+	streamThrough(t, app, rec, "")
+	if !bytesEqual(rec.Body.Bytes(), body) {
+		t.Fatal("the stream is not the file — the prefetched head and the rest do not line up")
+	}
+}
+
+// A playlist has nothing to prefetch: it is materialised instead, and asking
+// the CDN for the first megabyte of an m3u8 would cache a text file as audio.
+func TestWarmStreamDoesNotPrefetchPlaylists(t *testing.T) {
+	app := hlsStreamApp(t, stubFFmpeg(t, 1, 10*time.Millisecond, filepath.Join(t.TempDir(), "runs")))
+	app.warmStream("youtube_stream", "yt1")
+
+	app.prefetch.mu.Lock()
+	held := len(app.prefetch.entries)
+	app.prefetch.mu.Unlock()
+	if held != 0 {
+		t.Fatal("a playlist was stored in the prefetch cache")
+	}
+	// It was materialised instead, which is what the HLS cache is for.
+	if _, _, err := app.hls.materialize(context.Background(), "youtube_stream:yt1", StreamTarget{HLS: true, ACodec: "mp3", Ext: "mp3"}); err != nil {
+		t.Fatalf("the warm-up did not leave a materialised playlist behind: %v", err)
+	}
+}
+
+// The head of a track is handed out once, and only to the URL it came from: a
+// re-resolve between the warm-up and the stream request can change format, and
+// half of one encoding followed by the rest of another is silence.
+func TestPrefetchCacheHandsOutOnceAndChecksTheURL(t *testing.T) {
+	cache := newPrefetchCache()
+	entry := &prefetchEntry{url: "https://cdn.example/a.m4a", data: []byte("head"), total: 400, expires: time.Now().Add(time.Minute)}
+	cache.put("youtube_stream:a", entry)
+
+	if _, ok := cache.take("youtube_stream:a", "https://cdn.example/other.m4a"); ok {
+		t.Fatal("a chunk from a different URL was handed out")
+	}
+	cache.put("youtube_stream:a", entry)
+	if got, ok := cache.take("youtube_stream:a", entry.url); !ok || string(got.data) != "head" {
+		t.Fatal("the prefetched chunk was not handed out to the request it was fetched for")
+	}
+	if _, ok := cache.take("youtube_stream:a", entry.url); ok {
+		t.Fatal("the same chunk was handed out twice — it is streamed away on first use")
+	}
+
+	// Expired entries are as good as absent.
+	cache.put("youtube_stream:b", &prefetchEntry{url: "u", data: []byte("stale"), total: 5, expires: time.Now().Add(-time.Second)})
+	if _, ok := cache.take("youtube_stream:b", "u"); ok {
+		t.Fatal("an expired chunk was handed out")
+	}
+
+	// And the cache cannot grow without bound as tracks are skipped.
+	for i := 0; i < prefetchMaxEntries*3; i++ {
+		cache.put(fmt.Sprintf("youtube_stream:%d", i), &prefetchEntry{url: "u", data: []byte("x"), total: 1, expires: time.Now().Add(time.Duration(i) * time.Minute)})
+	}
+	cache.mu.Lock()
+	held := len(cache.entries)
+	cache.mu.Unlock()
+	if held > prefetchMaxEntries {
+		t.Fatalf("cache holds %d entries, more than the %d ceiling", held, prefetchMaxEntries)
+	}
+}
+
+// A seek is not what warm-on-play fetched, so it goes to the CDN as before.
+func TestPrefetchIsNotUsedForSeeks(t *testing.T) {
+	body := payload(2 << 20)
+	var requests int32
+	cdn := throttlingCDN(t, body, &requests)
+	defer cdn.Close()
+
+	app := streamApp(t, cdn.URL)
+	app.warmStream("youtube_stream", "yt1")
+
+	rec := httptest.NewRecorder()
+	streamThrough(t, app, rec, "bytes=1048576-1048675")
+	if rec.Code != http.StatusPartialContent {
+		t.Fatalf("expected 206, got %d", rec.Code)
+	}
+	if !bytesEqual(rec.Body.Bytes(), body[1048576:1048676]) {
+		t.Fatal("a seek was answered with the prefetched head of the file")
+	}
 }
 
 func TestParseRangeHint(t *testing.T) {

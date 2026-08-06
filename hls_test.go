@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -49,6 +50,18 @@ func hlsTestCache(t *testing.T, ffmpeg string) *hlsCache {
 
 func mp3Target(url string) StreamTarget {
 	return StreamTarget{URL: url, HLS: true, ACodec: "mp3", Ext: "mp3", Duration: 212}
+}
+
+// deadPlaylist is a playlist URL that answers 404 at once. An MP3 playlist goes
+// to the native downloader first, so these tests — which are about ffmpeg and
+// the files it leaves behind — need a URL the native path declines immediately
+// rather than one whose failure depends on what DNS does with an unroutable
+// host.
+func deadPlaylist(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	return server.URL + "/playlist.m3u8"
 }
 
 func runCount(t *testing.T, marker string) int {
@@ -179,7 +192,7 @@ func TestMaterializeProgressiveCacheHit(t *testing.T) {
 func TestMaterializeProgressiveConcurrent(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs")
 	cache := hlsTestCache(t, stubFFmpeg(t, 5, 100*time.Millisecond, marker))
-	target := mp3Target("https://cdn.example/playlist.m3u8")
+	target := mp3Target(deadPlaylist(t))
 
 	firstPath, _, firstDone := cache.materializeProgressive("soundcloud_stream:shared", target)
 	time.Sleep(150 * time.Millisecond) // the second listener arrives mid-remux
@@ -222,7 +235,7 @@ func TestHLSDetachFromRequestContext(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "runs")
 	cfg := Config{MediaRoot: t.TempDir(), FFmpegBinary: stubFFmpeg(t, 6, 100*time.Millisecond, marker), HLSRemuxTimeout: 10 * time.Second}
 	app := &App{cfg: cfg, hls: newHLSCache(cfg)}
-	target := mp3Target("https://cdn.example/playlist.m3u8")
+	target := mp3Target(deadPlaylist(t))
 	trackID := "soundcloud_stream:detach"
 
 	ctx, cancel := context.WithCancel(context.Background())

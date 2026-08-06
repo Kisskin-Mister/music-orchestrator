@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +32,7 @@ type App struct {
 	providers *ProviderService
 	sessions  *sessionStore
 	hls       *hlsCache
+	prefetch  *prefetchCache
 	mux       *http.ServeMux
 }
 
@@ -42,7 +45,7 @@ func NewApp(cfg Config) (*App, error) {
 		return nil, err
 	}
 	effective := st.StoredSettings().apply(cfg)
-	a := &App{cfg: effective, baseCfg: cfg, store: st, providers: NewProviderService(effective), sessions: newSessionStore(), hls: newHLSCache(effective), mux: http.NewServeMux()}
+	a := &App{cfg: effective, baseCfg: cfg, store: st, providers: NewProviderService(effective), sessions: newSessionStore(), hls: newHLSCache(effective), prefetch: newPrefetchCache(), mux: http.NewServeMux()}
 	a.routes()
 	return a, nil
 }
@@ -457,9 +460,14 @@ func (a *App) playback(w http.ResponseWriter, r *http.Request) {
 // warmStream starts the work /v1/stream would otherwise start from cold. Both
 // steps have to happen inside the goroutine: a resolve is a yt-dlp process and
 // would hold up the playback response it is supposed to run behind. Nothing is
-// returned because nothing waits on it — the result lands in the stream cache
-// and the HLS cache, where the stream request finds it. Only playlists are
-// warmed; a plain file already streams through the proxy in one round trip.
+// returned because nothing waits on it — the result lands in the stream cache,
+// the HLS cache and the prefetch cache, where the stream request finds it.
+//
+// A playlist is materialised, which is the slow case. A plain file is not
+// downloaded, only opened: the first chunk is fetched and kept, so the stream
+// request that follows a second later skips both the DNS/TLS handshake and the
+// round trip that used to stand between the client pressing play and the first
+// audio byte.
 func (a *App) warmStream(providerID, pid string) {
 	trackID := providerID + ":" + pid
 	target, err := a.providers.extractor.StreamTarget(providerID, pid)
@@ -468,11 +476,149 @@ func (a *App) warmStream(providerID, pid string) {
 		return
 	}
 	if !target.HLS {
+		a.prefetchFirstChunk(trackID, target)
 		return
 	}
 	if _, _, err := a.hls.materialize(context.Background(), trackID, target); err != nil {
 		slog.Debug("warm remux failed", "track", trackID, "error", err)
 	}
+}
+
+const (
+	// prefetchChunkSize is how much of a YouTube file warm-on-play pulls down
+	// in advance. A megabyte is several seconds of audio — enough to cover the
+	// gap while the first ranged request of the real stream is in flight —
+	// without spending a chunk's worth of bandwidth on a track the listener may
+	// skip before it starts.
+	prefetchChunkSize int64 = 1 << 20
+	// prefetchTTL only has to span the gap between /v1/playback and /v1/stream,
+	// which is however long the client takes to read one JSON response and open
+	// a URL. Beyond that the CDN link itself starts going stale.
+	prefetchTTL = 2 * time.Minute
+	// prefetchMaxEntries bounds what the cache can hold at once. Entries are
+	// single-use and short-lived, so this is a ceiling for skipped tracks
+	// rather than a working set.
+	prefetchMaxEntries = 4
+	prefetchTimeout    = 30 * time.Second
+)
+
+// prefetchEntry is the head of one track, fetched before it was asked for.
+type prefetchEntry struct {
+	url         string // the CDN URL it came from, to catch a re-resolve
+	data        []byte
+	total       int64 // the object's full size, from Content-Range
+	contentType string
+	expires     time.Time
+}
+
+// prefetchCache holds those heads until the matching /v1/stream arrives.
+//
+// Entries are handed out once and then dropped: the stream handler streams the
+// bytes straight to the client, and a listener who seeks back to the start gets
+// them from the client's own buffer, not from here. That keeps the cache to a
+// few megabytes without any eviction policy worth the name.
+type prefetchCache struct {
+	mu      sync.Mutex
+	entries map[string]*prefetchEntry
+}
+
+func newPrefetchCache() *prefetchCache {
+	return &prefetchCache{entries: map[string]*prefetchEntry{}}
+}
+
+func (c *prefetchCache) put(trackID string, entry *prefetchEntry) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for id, existing := range c.entries {
+		if now.After(existing.expires) {
+			delete(c.entries, id)
+		}
+	}
+	// Over the ceiling, the oldest head is the one least likely to still be
+	// wanted: warm-on-play fires in the order tracks are started.
+	for len(c.entries) >= prefetchMaxEntries {
+		oldest := ""
+		for id, existing := range c.entries {
+			if oldest == "" || existing.expires.Before(c.entries[oldest].expires) {
+				oldest = id
+			}
+		}
+		delete(c.entries, oldest)
+	}
+	c.entries[trackID] = entry
+}
+
+// take returns the prefetched head of a track and forgets it. The URL is
+// checked because a re-resolve between the warm-up and the stream request can
+// hand back a different format, and half of one encoding followed by the rest
+// of another is silence.
+func (c *prefetchCache) take(trackID, url string) (*prefetchEntry, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[trackID]
+	if !ok {
+		return nil, false
+	}
+	delete(c.entries, trackID)
+	if entry.url != url || time.Now().After(entry.expires) {
+		return nil, false
+	}
+	return entry, true
+}
+
+// takePrefetched claims the warm-up's head of a track for a request that can
+// use it. Only a request starting at byte 0 can: that is what warm-on-play
+// fetched, and it is also the request whose latency the listener hears as the
+// delay after pressing play. A seek is left to the CDN.
+func (a *App) takePrefetched(trackID, url string, start int64) (*prefetchEntry, bool) {
+	if start != 0 {
+		return nil, false
+	}
+	entry, ok := a.prefetch.take(trackID, url)
+	if !ok || entry.total <= 0 || len(entry.data) == 0 {
+		return nil, false
+	}
+	slog.Debug("stream served a prefetched first chunk", "track", trackID, "bytes", len(entry.data))
+	return entry, true
+}
+
+// prefetchFirstChunk pulls the head of a plain (non-playlist) file and parks it
+// in the prefetch cache. Failures are not worth reporting: this is a head
+// start, and the stream request does the whole thing itself if it is missing.
+func (a *App) prefetchFirstChunk(trackID string, target StreamTarget) {
+	if a.prefetch == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), prefetchTimeout)
+	defer cancel()
+
+	started := time.Now()
+	resp, total, err := openUpstreamChunk(ctx, target.URL, target.Headers, 0, prefetchChunkSize-1)
+	if err != nil {
+		slog.Debug("warm prefetch failed", "track", trackID, "error", err)
+		return
+	}
+	defer discardResponse(resp)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, prefetchChunkSize))
+	if err != nil || len(data) == 0 {
+		slog.Debug("warm prefetch read failed", "track", trackID, "bytes", len(data), "error", err)
+		return
+	}
+	a.prefetch.put(trackID, &prefetchEntry{
+		url:         target.URL,
+		data:        data,
+		total:       total,
+		contentType: resp.Header.Get("Content-Type"),
+		expires:     time.Now().Add(prefetchTTL),
+	})
+	slog.Debug("warm prefetch stored", "track", trackID, "bytes", len(data), "total", total, "elapsed", time.Since(started))
 }
 
 // upstreamChunkSize is why this proxy exists at all.
@@ -520,24 +666,30 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	var (
 		total       int64
 		contentType string
-		firstChunk  *http.Response
+		firstChunk  io.ReadCloser
 	)
 	rangeHeader := r.Header.Get("Range")
 	if hintStart, hintEnd, ok := parseRangeHint(rangeHeader); ok {
-		chunkEnd := hintStart + upstreamChunkSize - 1
-		if hintEnd >= 0 && hintEnd < chunkEnd {
-			chunkEnd = hintEnd
+		if entry, warm := a.takePrefetched(id, target.URL, hintStart); warm {
+			// Warm-on-play already has the head of this file in memory, so the
+			// listener hears it without waiting on the CDN at all.
+			firstChunk, total, contentType = io.NopCloser(bytes.NewReader(entry.data)), entry.total, entry.contentType
+		} else {
+			chunkEnd := hintStart + upstreamChunkSize - 1
+			if hintEnd >= 0 && hintEnd < chunkEnd {
+				chunkEnd = hintEnd
+			}
+			resp, refreshed, size, err := a.openUpstream(r.Context(), providerID, pid, target, hintStart, chunkEnd)
+			if err != nil {
+				slog.Warn("stream open failed", "track", id, "error", err)
+				writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+				return
+			}
+			firstChunk, target, total, contentType = resp.Body, refreshed, size, resp.Header.Get("Content-Type")
 		}
-		resp, refreshed, size, err := a.openUpstream(r.Context(), providerID, pid, target, hintStart, chunkEnd)
-		if err != nil {
-			slog.Warn("stream open failed", "track", id, "error", err)
-			writeError(w, http.StatusBadGateway, "Audio source is unavailable")
-			return
-		}
-		firstChunk, target, total, contentType = resp, refreshed, size, resp.Header.Get("Content-Type")
 		defer func() {
-			_, _ = io.Copy(io.Discard, firstChunk.Body)
-			_ = firstChunk.Body.Close()
+			_, _ = io.Copy(io.Discard, firstChunk)
+			_ = firstChunk.Close()
 		}()
 	} else {
 		// Suffix ranges ("bytes=-500") are relative to a size we do not know yet,
@@ -580,7 +732,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	if firstChunk != nil {
 		// Already in flight from the size probe — hand it to the listener before
 		// asking the CDN for anything else.
-		n, err := io.Copy(w, io.LimitReader(firstChunk.Body, end-offset+1))
+		n, err := io.Copy(w, io.LimitReader(firstChunk, end-offset+1))
 		if n > 0 && flusher != nil {
 			flusher.Flush()
 		}

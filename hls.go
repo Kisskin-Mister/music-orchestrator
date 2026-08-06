@@ -30,10 +30,12 @@ import (
 // free: byte ranges (so the scrubber works) and an exact duration in the
 // header (so the player does not have to guess one from the bitrate).
 //
-// The remux itself is not waited for. ffmpeg appends to a .partial file and the
-// handler reads from that same file, blocking at EOF until more arrives, so the
-// listener hears the first HLS segment about a second in instead of waiting the
-// 10-30s a whole playlist takes to download.
+// The remux itself is not waited for. The writer — the native segment
+// downloader in hls_native.go where the audio can be copied, ffmpeg where it
+// has to be transcoded — appends to a .partial file and the handler reads from
+// that same file, blocking at EOF until more arrives, so the listener hears the
+// first HLS segment about a second in instead of waiting the 10-30s a whole
+// playlist takes to download.
 type hlsCache struct {
 	dir     string
 	ffmpeg  string
@@ -165,11 +167,25 @@ func (c *hlsCache) materializeProgressive(trackID string, target StreamTarget) (
 	return tmp, container, job.result()
 }
 
-// remux runs ffmpeg to completion on a context of its own. Detaching from the
-// request context is deliberate: a listener who closes the tab five seconds in
-// used to kill the ffmpeg every other listener was waiting on and delete the
-// partial file, so the next play started from nothing again.
+// remux fills the job's .partial, by whichever route can do it.
+//
+// A stream copy does not need ffmpeg at all — the segments already hold the
+// output bytes — and the native downloader fetches six of them at once instead
+// of one after another, which is most of the wait on a cold SoundCloud track.
+// It declines anything it cannot do byte-for-byte, and everything that has to
+// be transcoded never reaches it, so ffmpeg stays the general case.
 func (c *hlsCache) remux(job *hlsJob, trackID, path string, target StreamTarget) {
+	if canUseNativeHLS(target) && c.remuxNative(job, trackID, path, target) {
+		return
+	}
+	c.remuxFFmpeg(job, trackID, path, target)
+}
+
+// remuxFFmpeg runs ffmpeg to completion on a context of its own. Detaching from
+// the request context is deliberate: a listener who closes the tab five seconds
+// in used to kill the ffmpeg every other listener was waiting on and delete the
+// partial file, so the next play started from nothing again.
+func (c *hlsCache) remuxFFmpeg(job *hlsJob, trackID, path string, target StreamTarget) {
 	runCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -204,6 +220,14 @@ func (c *hlsCache) remux(job *hlsJob, trackID, path string, target StreamTarget)
 		err = fmt.Errorf("ffmpeg remux failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 
+	c.finish(job, trackID, path, err)
+}
+
+// finish delivers a job's result to everyone waiting on it and takes it out of
+// the jobs map. Both the native and the ffmpeg path end here, and every path
+// that ends a job must go through it: a job whose done channel is never closed
+// leaves its readers waiting forever.
+func (c *hlsCache) finish(job *hlsJob, trackID, path string, err error) {
 	if err != nil {
 		// A truncated file must never be mistaken for a finished one by the
 		// next request, and it is no use to the readers still attached either.
