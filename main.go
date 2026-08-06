@@ -445,9 +445,34 @@ func (a *App) playback(w http.ResponseWriter, r *http.Request) {
 		stream := "/v1/stream/" + id
 		pb.PlaybackType = "extractor_stream"
 		pb.StreamURL = &stream
+		// The client takes a second or two to read this response and open the
+		// stream URL. Spending it on the resolve and the start of the remux is
+		// free head start on the only part of SoundCloud playback that is slow.
+		go a.warmStream(providerID, pid)
 		pb.Attribution = pr.Name
 	}
 	writeJSON(w, http.StatusOK, pb)
+}
+
+// warmStream starts the work /v1/stream would otherwise start from cold. Both
+// steps have to happen inside the goroutine: a resolve is a yt-dlp process and
+// would hold up the playback response it is supposed to run behind. Nothing is
+// returned because nothing waits on it — the result lands in the stream cache
+// and the HLS cache, where the stream request finds it. Only playlists are
+// warmed; a plain file already streams through the proxy in one round trip.
+func (a *App) warmStream(providerID, pid string) {
+	trackID := providerID + ":" + pid
+	target, err := a.providers.extractor.StreamTarget(providerID, pid)
+	if err != nil {
+		slog.Debug("warm resolve failed", "track", trackID, "error", err)
+		return
+	}
+	if !target.HLS {
+		return
+	}
+	if _, _, err := a.hls.materialize(context.Background(), trackID, target); err != nil {
+		slog.Debug("warm remux failed", "track", trackID, "error", err)
+	}
 }
 
 // upstreamChunkSize is why this proxy exists at all.

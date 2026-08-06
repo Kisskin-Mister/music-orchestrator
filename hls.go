@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,17 +23,55 @@ import (
 // <audio> src, which is why SoundCloud playback returned 502 while search kept
 // working.
 //
-// The playlist is remuxed once into a normal file and served from disk after
-// that. Remuxing rather than transcoding keeps this cheap enough for a Pi — the
+// The playlist is remuxed into a normal file and served from disk after that.
+// Remuxing rather than transcoding keeps this cheap enough for a Pi — the
 // segments already carry AAC or MP3, so ffmpeg only rewrites the container —
 // and a real file on disk restores the two things the proxy path gave us for
 // free: byte ranges (so the scrubber works) and an exact duration in the
 // header (so the player does not have to guess one from the bitrate).
+//
+// The remux itself is not waited for. ffmpeg appends to a .partial file and the
+// handler reads from that same file, blocking at EOF until more arrives, so the
+// listener hears the first HLS segment about a second in instead of waiting the
+// 10-30s a whole playlist takes to download.
 type hlsCache struct {
-	dir      string
-	ffmpeg   string
-	timeout  time.Duration
-	inflight sync.Map // cache path -> *sync.Mutex
+	dir     string
+	ffmpeg  string
+	timeout time.Duration
+
+	mu   sync.Mutex
+	jobs map[string]*hlsJob // final cache path -> remux in flight
+}
+
+// hlsJob is one running ffmpeg. It is shared: every listener that arrives while
+// the remux is in flight reads the same .partial rather than starting a second
+// process over the same output path.
+type hlsJob struct {
+	tmp       string
+	container hlsContainer
+	done      chan struct{} // closed when the remux has finished or failed
+	err       error         // valid once done is closed
+}
+
+// result hands out a fresh single-use channel per caller, because a job has
+// many readers and a value sent on a shared channel would only reach one.
+func (j *hlsJob) result() <-chan error {
+	ch := make(chan error, 1)
+	go func() {
+		<-j.done
+		ch <- j.err
+		close(ch)
+	}()
+	return ch
+}
+
+// settled is the already-finished form of the same channel, for a cache hit or
+// a failure that never got as far as starting ffmpeg.
+func settled(err error) <-chan error {
+	ch := make(chan error, 1)
+	ch <- err
+	close(ch)
+	return ch
 }
 
 func newHLSCache(cfg Config) *hlsCache {
@@ -43,6 +83,7 @@ func newHLSCache(cfg Config) *hlsCache {
 		dir:     filepath.Join(cfg.MediaRoot, "stream-cache"),
 		ffmpeg:  cfg.FFmpegBinary,
 		timeout: timeout,
+		jobs:    map[string]*hlsJob{},
 	}
 }
 
@@ -54,19 +95,25 @@ type hlsContainer struct {
 	args []string
 }
 
-// containerFor keeps the audio bytes untouched wherever possible. AAC goes into
-// MP4 with faststart so the moov atom sits before the audio and a player knows
-// the duration from the first read; MP3 needs no container at all. Anything else
-// (Opus in an HLS playlist, say) is transcoded, because the point of this path
-// is to hand the client something it can definitely decode.
+// containerFor keeps the audio bytes untouched wherever possible, and picks
+// packaging that can be read while it is still being written.
+//
+// MP3 is the ideal case and the one SoundCloud usually offers (scoreFormat
+// prefers an MP3 playlist over an AAC one for exactly this reason): a bare MP3
+// is a stream of self-describing frames, so a reader can start on the first one
+// ffmpeg emits. AAC goes into ADTS for the same reason — the old MP4 output
+// needed +faststart, which rewrites the file at the end to move the moov atom
+// in front of the audio, and nothing can be played out of that file until the
+// rewrite lands. Anything else (Opus in a playlist, say) is transcoded, because
+// the point of this path is to hand the client something it can decode.
 func containerFor(target StreamTarget) hlsContainer {
 	codec := strings.ToLower(target.ACodec)
 	ext := strings.ToLower(target.Ext)
 	switch {
-	case strings.HasPrefix(codec, "mp4a"), codec == "aac", ext == "m4a", ext == "mp4":
-		return hlsContainer{ext: "m4a", contentType: "audio/mp4", args: []string{"-c:a", "copy", "-movflags", "+faststart", "-f", "mp4"}}
 	case codec == "mp3", ext == "mp3":
 		return hlsContainer{ext: "mp3", contentType: "audio/mpeg", args: []string{"-c:a", "copy", "-f", "mp3"}}
+	case strings.HasPrefix(codec, "mp4a"), codec == "aac", ext == "m4a", ext == "mp4":
+		return hlsContainer{ext: "aac", contentType: "audio/aac", args: []string{"-c:a", "copy", "-f", "adts"}}
 	default:
 		return hlsContainer{ext: "mp3", contentType: "audio/mpeg", args: []string{"-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"}}
 	}
@@ -80,38 +127,50 @@ func (c *hlsCache) pathFor(trackID string, container hlsContainer) string {
 	return filepath.Join(c.dir, hex.EncodeToString(sum[:])+"."+container.ext)
 }
 
-func (c *hlsCache) lockFor(path string) *sync.Mutex {
-	value, _ := c.inflight.LoadOrStore(path, &sync.Mutex{})
-	return value.(*sync.Mutex)
-}
-
-// materialize returns the path of a complete local copy, building it if needed.
-func (c *hlsCache) materialize(ctx context.Context, trackID string, target StreamTarget) (string, hlsContainer, error) {
+// materializeProgressive returns a path that can be read immediately, the
+// packaging it will hold, and a channel that reports how the remux ended.
+//
+// The path is the finished cache file on a hit and the growing .partial
+// otherwise; a reader tells the two apart by comparing against pathFor, and
+// followerReader copes with the .partial being renamed out from under it while
+// it reads.
+func (c *hlsCache) materializeProgressive(trackID string, target StreamTarget) (string, hlsContainer, <-chan error) {
 	container := containerFor(target)
 	path := c.pathFor(trackID, container)
 
-	// Two listeners hitting the same cold track must not run two ffmpeg
-	// processes over the same output path. The second one waits and then finds
-	// the file already there.
-	lock := c.lockFor(path)
-	lock.Lock()
-	defer lock.Unlock()
-
 	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 		slog.Debug("hls cache hit", "track", trackID, "bytes", info.Size(), "container", container.ext)
-		return path, container, nil
+		return path, container, settled(nil)
+	}
+
+	c.mu.Lock()
+	if job, ok := c.jobs[path]; ok {
+		c.mu.Unlock()
+		return job.tmp, job.container, job.result()
 	}
 	if err := os.MkdirAll(c.dir, 0755); err != nil {
-		return "", container, err
+		c.mu.Unlock()
+		return "", container, settled(err)
 	}
-
-	// ffmpeg is told to write a temp file that is renamed into place only on
-	// success: a cancelled or crashed remux must never leave a truncated file
-	// that the next request mistakes for a finished one.
+	// A .partial with no job behind it was left by a process that died mid
+	// remux, so nothing will ever finish it. Only the jobs map means "someone
+	// is writing this"; the file on its own does not.
 	tmp := path + ".partial"
-	defer os.Remove(tmp)
+	_ = os.Remove(tmp)
+	job := &hlsJob{tmp: tmp, container: container, done: make(chan struct{})}
+	c.jobs[path] = job
+	c.mu.Unlock()
 
-	runCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	go c.remux(job, trackID, path, target)
+	return tmp, container, job.result()
+}
+
+// remux runs ffmpeg to completion on a context of its own. Detaching from the
+// request context is deliberate: a listener who closes the tab five seconds in
+// used to kill the ffmpeg every other listener was waiting on and delete the
+// partial file, so the next play started from nothing again.
+func (c *hlsCache) remux(job *hlsJob, trackID, path string, target StreamTarget) {
+	runCtx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
 	args := []string{"-hide_banner", "-loglevel", "error", "-y"}
@@ -119,36 +178,60 @@ func (c *hlsCache) materialize(ctx context.Context, trackID string, target Strea
 		args = append(args, "-headers", headers)
 	}
 	args = append(args, "-i", target.URL, "-vn")
-	args = append(args, container.args...)
-	args = append(args, tmp)
+	args = append(args, job.container.args...)
+	args = append(args, job.tmp)
 
-	slog.Info("hls remux started", "track", trackID, "container", container.ext, "codec", target.ACodec, "timeout", c.timeout)
+	slog.Info("hls remux started", "track", trackID, "container", job.container.ext, "codec", target.ACodec, "timeout", c.timeout)
 	started := time.Now()
 	cmd := exec.CommandContext(runCtx, c.ffmpeg, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// A cancelled runCtx with a live parent context means ffmpeg hit the
-		// remux deadline rather than the listener closing the tab, and the
-		// distinction is the difference between a bug report and a skip.
-		if runCtx.Err() != nil && ctx.Err() == nil {
-			slog.Warn("hls remux timed out", "track", trackID, "elapsed", time.Since(started), "timeout", c.timeout)
-			return "", container, fmt.Errorf("ffmpeg remux timed out after %s", c.timeout)
+
+	err := cmd.Run()
+	if err == nil {
+		var info os.FileInfo
+		if info, err = os.Stat(job.tmp); err == nil {
+			if info.Size() == 0 {
+				err = fmt.Errorf("ffmpeg produced an empty file")
+			} else if err = os.Rename(job.tmp, path); err == nil {
+				slog.Info("hls remuxed", "track", trackID, "bytes", info.Size(), "container", job.container.ext, "elapsed", time.Since(started))
+			}
 		}
-		return "", container, fmt.Errorf("ffmpeg remux failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	} else if runCtx.Err() != nil {
+		slog.Warn("hls remux timed out", "track", trackID, "elapsed", time.Since(started), "timeout", c.timeout)
+		err = fmt.Errorf("ffmpeg remux timed out after %s", c.timeout)
+	} else {
+		err = fmt.Errorf("ffmpeg remux failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	info, err := os.Stat(tmp)
+
 	if err != nil {
-		return "", container, err
+		// A truncated file must never be mistaken for a finished one by the
+		// next request, and it is no use to the readers still attached either.
+		_ = os.Remove(job.tmp)
+		slog.Warn("hls remux failed", "track", trackID, "error", err)
 	}
-	if info.Size() == 0 {
-		return "", container, fmt.Errorf("ffmpeg produced an empty file")
+
+	c.mu.Lock()
+	delete(c.jobs, path)
+	c.mu.Unlock()
+
+	job.err = err
+	close(job.done)
+}
+
+// materialize waits for a complete local copy. Playback warming uses it; the
+// stream handler does not, because waiting is the thing it exists to avoid.
+func (c *hlsCache) materialize(ctx context.Context, trackID string, target StreamTarget) (string, hlsContainer, error) {
+	_, container, done := c.materializeProgressive(trackID, target)
+	select {
+	case err := <-done:
+		if err != nil {
+			return "", container, err
+		}
+		return c.pathFor(trackID, container), container, nil
+	case <-ctx.Done():
+		return "", container, ctx.Err()
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return "", container, err
-	}
-	slog.Info("hls remuxed", "track", trackID, "bytes", info.Size(), "container", container.ext, "elapsed", time.Since(started))
-	return path, container, nil
 }
 
 // ffmpegHeaders renders the headers yt-dlp prescribed in the CRLF-delimited
@@ -168,29 +251,214 @@ func ffmpegHeaders(headers map[string]string) string {
 	return b.String()
 }
 
-// serveHLS hands the remuxed file to http.ServeContent, which supplies range
-// support, conditional requests and Content-Length without further work here.
+// followerPollInterval is how long a reader that has caught up with ffmpeg
+// sleeps before looking for more bytes. Short enough to be inaudible between
+// segments, long enough not to spin a Pi core for the length of a track.
+const followerPollInterval = 100 * time.Millisecond
+
+// followerReader reads a file that is still being written, in the manner of
+// tail -f: at EOF it waits for either more bytes or the remux to end, instead
+// of reporting the end of the audio.
+//
+// It opens lazily and falls back to the finished cache path, because ffmpeg
+// renames the .partial into place the moment it is done and a reader that
+// arrived a moment too late would otherwise find nothing to open. A reader that
+// opened before the rename keeps its descriptor, which follows the file.
+type followerReader struct {
+	ctx      context.Context
+	path     string        // the .partial being written
+	fallback string        // the finished cache path it is renamed to
+	done     <-chan error  // remux result, delivered once
+	poll     time.Duration // 0 means followerPollInterval
+
+	f        *os.File
+	pos      int64
+	finished bool
+}
+
+func (fr *followerReader) open() error {
+	f, err := os.Open(fr.path)
+	if err != nil && os.IsNotExist(err) && fr.fallback != "" {
+		f, err = os.Open(fr.fallback)
+	}
+	if err != nil {
+		return err
+	}
+	fr.f = f
+	return nil
+}
+
+func (fr *followerReader) Close() error {
+	if fr.f == nil {
+		return nil
+	}
+	return fr.f.Close()
+}
+
+func (fr *followerReader) Read(p []byte) (int, error) {
+	for {
+		if fr.f == nil {
+			if err := fr.open(); err != nil && !os.IsNotExist(err) {
+				return 0, err
+			}
+		}
+		if fr.f != nil {
+			// ReadAt rather than Read: a plain Read that returned io.EOF once
+			// would keep returning it, since the file offset is already at the
+			// end that ffmpeg is about to move.
+			n, err := fr.f.ReadAt(p, fr.pos)
+			if n > 0 {
+				fr.pos += int64(n)
+				return n, nil
+			}
+			if err != nil && err != io.EOF {
+				return 0, err
+			}
+		}
+		// Caught up with the writer, or the file does not exist yet.
+		if fr.finished {
+			if fr.f == nil {
+				return 0, fmt.Errorf("remux produced no output")
+			}
+			return 0, io.EOF
+		}
+		if err := fr.wait(); err != nil {
+			return 0, err
+		}
+	}
+}
+
+// wait blocks until there is a reason to look at the file again. A remux that
+// ends does not end the read: ffmpeg's last bytes may still be unread, so the
+// caller loops once more and only then reports EOF.
+func (fr *followerReader) wait() error {
+	ctx := fr.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	poll := fr.poll
+	if poll <= 0 {
+		poll = followerPollInterval
+	}
+	timer := time.NewTimer(poll)
+	defer timer.Stop()
+	select {
+	case err := <-fr.done:
+		fr.finished = true
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// serveHLS streams the remuxed audio, starting before the remux has finished.
+//
+// A finished file goes through http.ServeContent, which brings ranges,
+// conditional requests and an exact Content-Length. A file still being written
+// is streamed progressively instead: length is unknown until ffmpeg stops, so
+// the response is chunked and carries the duration in X-Content-Duration for
+// players that want a scrubber before the file is complete.
 func (a *App) serveHLS(w http.ResponseWriter, r *http.Request, trackID string, target StreamTarget) {
 	providerID, _, _ := splitTrackID(trackID)
 	message := unavailableMessage(providerID)
-	path, container, err := a.hls.materialize(r.Context(), trackID, target)
-	if err != nil {
-		if r.Context().Err() != nil {
-			return
+
+	path, container, done := a.hls.materializeProgressive(trackID, target)
+	final := a.hls.pathFor(trackID, container)
+	if path == "" {
+		if err := <-done; err != nil {
+			slog.Warn("hls cache unusable", "track", trackID, "error", err)
 		}
-		slog.Warn("hls remux failed", "track", trackID, "error", err)
 		writeError(w, http.StatusBadGateway, message)
 		return
 	}
+	if path == final {
+		a.serveHLSFile(w, r, final, container, message)
+		return
+	}
+
+	// A seek cannot be answered progressively: bytes=N- has to be measured
+	// against a total length that only exists once ffmpeg has stopped. Playback
+	// from the start is what needs to be instant, so a mid-track request waits
+	// for the remux and is then served the complete file with real ranges.
+	if start, _, ok := parseRangeHint(r.Header.Get("Range")); ok && start > 0 {
+		select {
+		case err := <-done:
+			if err != nil {
+				writeError(w, http.StatusBadGateway, message)
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+		a.serveHLSFile(w, r, final, container, message)
+		return
+	}
+
+	fr := &followerReader{ctx: r.Context(), path: path, fallback: final, done: done}
+	defer fr.Close()
+
+	// The first read is what decides between an error page and audio, so the
+	// headers cannot go out before it returns.
+	buf := make([]byte, 32*1024)
+	n, err := fr.Read(buf)
+	if err != nil && n == 0 {
+		if r.Context().Err() != nil {
+			return
+		}
+		slog.Warn("hls progressive read failed", "track", trackID, "error", err)
+		writeError(w, http.StatusBadGateway, message)
+		return
+	}
+
+	w.Header().Set("Content-Type", container.contentType)
+	w.Header().Set("Accept-Ranges", "bytes")
+	if target.Duration > 0 {
+		// No Content-Length is guessed from the duration: the real bitrate of a
+		// stream copy is whatever SoundCloud encoded, and a length that is off
+		// by a few percent either truncates the audio or hangs the player at
+		// the end. X-Content-Duration gives the scrubber its range without
+		// claiming a byte count we do not have.
+		w.Header().Set("X-Content-Duration", strconv.FormatFloat(target.Duration, 'f', 3, 64))
+	}
+	flusher, _ := w.(http.Flusher)
+
+	for {
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				slog.Warn("hls progressive stream ended early", "track", trackID, "error", err)
+			}
+			return
+		}
+		if r.Context().Err() != nil {
+			return
+		}
+		n, err = fr.Read(buf)
+	}
+}
+
+// serveHLSFile is the finished-file path, unchanged from before progressive
+// streaming existed: ServeContent supplies ranges, conditional requests and
+// Content-Length without further work here.
+func (a *App) serveHLSFile(w http.ResponseWriter, r *http.Request, path string, container hlsContainer, message string) {
 	file, err := os.Open(path)
 	if err != nil {
-		slog.Warn("hls cache read failed", "track", trackID, "error", err)
+		slog.Warn("hls cache read failed", "path", path, "error", err)
 		writeError(w, http.StatusBadGateway, message)
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil {
+	if err != nil || info.Size() == 0 {
 		writeError(w, http.StatusBadGateway, message)
 		return
 	}

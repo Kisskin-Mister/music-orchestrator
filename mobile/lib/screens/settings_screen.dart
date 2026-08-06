@@ -148,7 +148,7 @@ class SettingsScreen extends StatelessWidget {
         const SizedBox(height: 32),
         Center(
           child: Text(
-            'Music Orchestrator v0.3.2',
+            'Music Orchestrator v0.3.3',
             style: TextStyle(color: AppColors.subtle, fontSize: 12),
           ),
         ),

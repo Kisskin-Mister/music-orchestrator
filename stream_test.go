@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -186,6 +187,121 @@ func TestStreamProxyReresolvesAfterUpstream403(t *testing.T) {
 	if !bytesEqual(rec.Body.Bytes(), body) {
 		t.Fatal("delivered bytes do not match the source")
 	}
+}
+
+// A playlist has to reach the listener while ffmpeg is still downloading it.
+// Waiting for the remux is what made SoundCloud tracks take 10-30s to start.
+func TestStreamHLSProgressive(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "runs")
+	const steps = 6
+	const pause = 150 * time.Millisecond
+	app := hlsStreamApp(t, stubFFmpeg(t, steps, pause, marker))
+
+	server := httptest.NewServer(app)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/stream/youtube_stream:yt1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=0-1023")
+
+	started := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for a track still being remuxed, got %d", resp.StatusCode)
+	}
+
+	first := make([]byte, 8)
+	if _, err := io.ReadFull(resp.Body, first); err != nil {
+		t.Fatalf("first bytes: %v", err)
+	}
+	ttfb := time.Since(started)
+	// The remux runs for roughly steps*pause; audio has to start long before it
+	// ends, not after.
+	if limit := steps * pause / 2; ttfb > limit {
+		t.Fatalf("first byte took %s, remux takes ~%s — the response waited for the whole file", ttfb, steps*pause)
+	}
+	if got, want := string(first), stubOutput(steps)[:8]; got != want {
+		t.Fatalf("first bytes = %q, want %q", got, want)
+	}
+
+	rest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if got, want := string(first)+string(rest), stubOutput(steps); got != want {
+		t.Fatalf("streamed %q, want the complete %q", got, want)
+	}
+	if resp.Header.Get("Content-Type") != "audio/mpeg" {
+		t.Fatalf("Content-Type = %q, want audio/mpeg", resp.Header.Get("Content-Type"))
+	}
+	// The length is unknown while ffmpeg is writing, so the scrubber is fed the
+	// duration instead of a guessed byte count.
+	if resp.Header.Get("X-Content-Duration") == "" {
+		t.Fatal("X-Content-Duration missing — the player has nothing to size the scrubber with")
+	}
+
+	// The finished file is now a cache hit, served with real ranges.
+	seek, err := http.NewRequest(http.MethodGet, server.URL+"/v1/stream/youtube_stream:yt1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seek.Header.Set("Range", "bytes=9-17")
+	cached, err := http.DefaultClient.Do(seek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Body.Close()
+	if cached.StatusCode != http.StatusPartialContent {
+		t.Fatalf("expected 206 from the cached file, got %d", cached.StatusCode)
+	}
+	body, err := io.ReadAll(cached.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), stubOutput(steps)[9:18]; got != want {
+		t.Fatalf("ranged read = %q, want %q", got, want)
+	}
+	if n := runCount(t, marker); n != 1 {
+		t.Fatalf("started %d ffmpeg processes, want 1", n)
+	}
+}
+
+// hlsStreamApp resolves to an m3u8 playlist, which sends the stream handler
+// down the remux path with the given ffmpeg standing in for a real one.
+func hlsStreamApp(t *testing.T, ffmpeg string) *App {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "yt-dlp-hls-mock")
+	script := "#!/usr/bin/env bash\nset -e\ncat <<'JSON'\n" +
+		`{"id":"yt1","title":"Mock","duration":200,"formats":[{"url":"https://cdn.example/playlist.m3u8","protocol":"m3u8_native","acodec":"mp3","ext":"mp3","vcodec":"none","abr":128}]}` +
+		"\nJSON\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app, err := NewApp(Config{
+		Addr:                  ":0",
+		Environment:           "test",
+		APIKeys:               map[string]bool{"test-key": true},
+		CORSOrigins:           []string{"*"},
+		StorePath:             filepath.Join(dir, "store.json"),
+		MediaRoot:             filepath.Join(dir, "media"),
+		EnableRiskyExtractors: true,
+		YTDLPBinary:           bin,
+		FFmpegBinary:          ffmpeg,
+		ExtractorTimeout:      20 * time.Second,
+		DownloadTimeout:       20 * time.Second,
+		HLSRemuxTimeout:       20 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app
 }
 
 func TestParseRangeHint(t *testing.T) {

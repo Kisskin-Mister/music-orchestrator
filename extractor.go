@@ -18,10 +18,11 @@ import (
 
 // Resolving a stream URL costs a cold yt-dlp process (seconds). The CDN links
 // stay valid for hours, so caching them across a listening session turns
-// replay/seek/next into instant hits. Five minutes keeps a stale link from
-// outliving a session by much, and a link that does expire early is recovered
-// by the 403 re-resolve in the stream handler rather than by the TTL.
-const streamCacheTTL = 300 * time.Second
+// replay/seek/next into instant hits. An hour matches how long the links
+// actually live; the five minutes this used to be expired mid-track, so seeking
+// past 5:00 paid for a fresh yt-dlp run. A link that does expire early is
+// recovered by the 403 re-resolve in the stream handler rather than by the TTL.
+const streamCacheTTL = 1 * time.Hour
 
 type streamCacheEntry struct {
 	target  StreamTarget
@@ -63,6 +64,21 @@ type StreamTarget struct {
 	HLS     bool
 	ACodec  string
 	Ext     string
+	// Duration is the track length in seconds as yt-dlp reports it. A remuxed
+	// playlist is served before its byte length is known, so this is the only
+	// thing the client can build a scrubber from until the file is complete.
+	Duration float64
+}
+
+// streamFlight is one in-progress resolve. yt-dlp is expensive enough that two
+// listeners starting the same cold track must not each pay for a process: the
+// second waits on the first's result. Warm-on-play makes this the normal case —
+// /v1/playback starts a resolve that /v1/stream arrives on top of a moment
+// later.
+type streamFlight struct {
+	done   chan struct{}
+	target StreamTarget
+	err    error
 }
 
 // isHLS is true for a manifest rather than a file. yt-dlp names the protocol
@@ -80,6 +96,7 @@ func isHLS(protocol, rawURL string) bool {
 type Extractor struct {
 	cfg         Config
 	streamCache sync.Map // cacheKey -> streamCacheEntry
+	streamFlow  sync.Map // cacheKey -> *streamFlight
 	searchMu    sync.Mutex
 	searchCache map[string]searchCacheEntry // providerID+query -> searchCacheEntry
 }
@@ -102,6 +119,9 @@ type ytdlpInfo struct {
 	OriginalURL string            `json:"original_url"`
 	Thumbnail   string            `json:"thumbnail"`
 	URL         string            `json:"url"`
+	ACodec      string            `json:"acodec"`
+	Ext         string            `json:"ext"`
+	Protocol    string            `json:"protocol"`
 	IEKey       string            `json:"ie_key"`
 	Type        string            `json:"_type"`
 	IsLive      bool              `json:"is_live"`
@@ -293,17 +313,48 @@ func (e *Extractor) StreamSource(providerID, pid string) (string, map[string]str
 	return target.URL, target.Headers, nil
 }
 
-// StreamTarget resolves the audio source and reports how it is packaged.
+// StreamTarget resolves the audio source and reports how it is packaged. One
+// yt-dlp process runs per track at a time; concurrent callers share its result.
 func (e *Extractor) StreamTarget(providerID, pid string) (StreamTarget, error) {
 	cacheKey := providerID + ":" + pid
-	if cached, ok := e.streamCache.Load(cacheKey); ok {
-		if entry, ok := cached.(streamCacheEntry); ok {
-			if time.Now().Before(entry.expires) {
-				return entry.target, nil
-			}
-			e.streamCache.Delete(cacheKey)
-		}
+	if target, ok := e.cachedStream(cacheKey); ok {
+		return target, nil
 	}
+
+	flight := &streamFlight{done: make(chan struct{})}
+	if existing, loaded := e.streamFlow.LoadOrStore(cacheKey, flight); loaded {
+		leader := existing.(*streamFlight)
+		<-leader.done
+		return leader.target, leader.err
+	}
+	defer func() {
+		// Dropped before the waiters are released, and after resolveStream has
+		// already filled the cache, so a caller arriving in between finds the
+		// finished entry rather than starting a second process.
+		e.streamFlow.Delete(cacheKey)
+		close(flight.done)
+	}()
+	flight.target, flight.err = e.resolveStream(providerID, pid, cacheKey)
+	return flight.target, flight.err
+}
+
+func (e *Extractor) cachedStream(cacheKey string) (StreamTarget, bool) {
+	cached, ok := e.streamCache.Load(cacheKey)
+	if !ok {
+		return StreamTarget{}, false
+	}
+	entry, ok := cached.(streamCacheEntry)
+	if !ok {
+		return StreamTarget{}, false
+	}
+	if time.Now().Before(entry.expires) {
+		return entry.target, true
+	}
+	e.streamCache.Delete(cacheKey)
+	return StreamTarget{}, false
+}
+
+func (e *Extractor) resolveStream(providerID, pid, cacheKey string) (StreamTarget, error) {
 	u, err := e.urlFor(providerID, pid)
 	if err != nil {
 		return StreamTarget{}, err
@@ -312,9 +363,11 @@ func (e *Extractor) StreamTarget(providerID, pid string) (StreamTarget, error) {
 	if err != nil {
 		return StreamTarget{}, err
 	}
-	if info.URL != "" {
-		return e.cacheStream(cacheKey, StreamTarget{URL: info.URL, Headers: info.HTTPHeaders, HLS: isHLS("", info.URL)}), nil
-	}
+	// The format list is scored before yt-dlp's own pick is considered. Left to
+	// itself yt-dlp maximises bitrate, which on SoundCloud means the 160k AAC
+	// playlist even for tracks that also publish a plain 128k MP3 — a remux the
+	// listener waits on instead of a file the proxy streams in one round trip.
+	// scoreFormat knows which of those this backend can actually serve fast.
 	formats := info.Formats
 	sort.SliceStable(formats, func(i, j int) bool { return scoreFormat(formats[i]) > scoreFormat(formats[j]) })
 	for _, f := range formats {
@@ -327,16 +380,29 @@ func (e *Extractor) StreamTarget(providerID, pid string) (StreamTarget, error) {
 			return e.cacheStream(cacheKey, targetFor(f, info)), nil
 		}
 	}
+	// Nothing scoreable: fall back to whatever yt-dlp resolved. The codec and
+	// extension come along so the remux can copy the audio rather than guess.
+	if info.URL != "" {
+		return e.cacheStream(cacheKey, StreamTarget{
+			URL:      info.URL,
+			Headers:  info.HTTPHeaders,
+			HLS:      isHLS(info.Protocol, info.URL),
+			ACodec:   info.ACodec,
+			Ext:      info.Ext,
+			Duration: info.Duration,
+		}), nil
+	}
 	return StreamTarget{}, fmt.Errorf("no playable audio URL")
 }
 
 func targetFor(f ytdlpFormat, info ytdlpInfo) StreamTarget {
 	return StreamTarget{
-		URL:     f.URL,
-		Headers: headersOr(f.HTTPHeaders, info.HTTPHeaders),
-		HLS:     isHLS(f.Protocol, f.URL),
-		ACodec:  f.ACodec,
-		Ext:     f.Ext,
+		URL:      f.URL,
+		Headers:  headersOr(f.HTTPHeaders, info.HTTPHeaders),
+		HLS:      isHLS(f.Protocol, f.URL),
+		ACodec:   f.ACodec,
+		Ext:      f.Ext,
+		Duration: info.Duration,
 	}
 }
 
@@ -376,12 +442,19 @@ func scoreFormat(f ytdlpFormat) float64 {
 	} else if f.Ext == "webm" || f.ACodec == "opus" {
 		s -= 100_000
 	}
-	// An HLS playlist has to be remuxed before it can be played, which costs the
-	// listener 10-30s on the first play. SoundCloud offers a progressive URL
-	// alongside the playlist for many tracks; taking it keeps playback on the
-	// fast proxy path.
+	// An HLS playlist has to be remuxed before it can be played. SoundCloud
+	// offers a progressive URL alongside the playlist for many tracks; taking it
+	// keeps playback on the fast proxy path.
 	if isHLS(f.Protocol, f.URL) {
 		s -= 500_000
+		// Among playlists the AAC preference above flips. An MP3 playlist
+		// remuxes into a bare stream of frames the handler can serve while
+		// ffmpeg is still writing it, whereas AAC has to be repacked into a
+		// container, and the MP4 one a player wants cannot be read until the
+		// remux finishes. See containerFor.
+		if f.Ext == "mp3" || f.ACodec == "mp3" {
+			s += 200_000
+		}
 	}
 	return s
 }
