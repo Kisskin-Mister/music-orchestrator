@@ -37,6 +37,21 @@ describe('correctedDurationSeconds', () => {
     expect(correctedDurationSeconds(200, 259)).toBe(259);
   });
 
+  it('halves suspiciously long media durations when the provider has none', () => {
+    // 2x a 4-minute song: the container length leaked through as the duration.
+    expect(correctedDurationSeconds(0, 480)).toBe(240);
+    expect(correctedDurationSeconds(undefined, 480)).toBe(240);
+    // Short enough to be a real track — nothing to halve.
+    expect(correctedDurationSeconds(0, 300)).toBe(300);
+    // Long-form content (podcast, mix) must be left alone.
+    expect(correctedDurationSeconds(0, 1201)).toBe(1201);
+    expect(correctedDurationSeconds(0, 3600)).toBe(3600);
+  });
+
+  it('never halves when the provider reports a duration', () => {
+    expect(correctedDurationSeconds(480, 480)).toBe(480);
+  });
+
   it('ignores invalid media durations', () => {
     expect(correctedDurationSeconds(201, 0)).toBe(201);
     expect(correctedDurationSeconds(201, Number.NaN)).toBe(201);

@@ -93,17 +93,30 @@ class PlayerController extends ChangeNotifier {
   /// so just_audio reports roughly 2x real duration. When the audio element
   /// claims far more than the provider metadata, clamp to provider value.
   static const _overreportedRatio = 1.3;
-  Duration get duration {
-    final raw = _audio.duration ?? Duration.zero;
-    final track = currentTrack;
-    final ds = track?.durationSeconds;
-    if (ds == null || ds <= 0) return raw;
-    final providerMs = ds * 1000;
+
+  /// Without provider metadata the only signal is the length itself: a doubled
+  /// song lands in 300..1200s. Shorter than that has nothing to halve, longer
+  /// is most likely a podcast or a mix and must be left alone.
+  static const _halvingMinSeconds = 300;
+  static const _halvingMaxSeconds = 1200;
+
+  static Duration correctedDuration(Duration raw, int? providerSeconds) {
+    if (providerSeconds == null || providerSeconds <= 0) {
+      final seconds = raw.inSeconds;
+      if (seconds > _halvingMinSeconds && seconds <= _halvingMaxSeconds) {
+        return Duration(milliseconds: raw.inMilliseconds ~/ 2);
+      }
+      return raw;
+    }
+    final providerMs = providerSeconds * 1000;
     if (raw.inMilliseconds > providerMs * _overreportedRatio) {
       return Duration(milliseconds: providerMs);
     }
     return raw;
   }
+
+  Duration get duration =>
+      correctedDuration(_audio.duration ?? Duration.zero, currentTrack?.durationSeconds);
 
   Future<void> loadHistory() async {
     final prefs = await SharedPreferences.getInstance();

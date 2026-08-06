@@ -17,9 +17,11 @@ import (
 )
 
 // Resolving a stream URL costs a cold yt-dlp process (seconds). The CDN links
-// stay valid far longer than a minute, so a short cache turns replay/seek/next
-// within one listening session into an instant hit without risking a stale link.
-const streamCacheTTL = 60 * time.Second
+// stay valid for hours, so caching them across a listening session turns
+// replay/seek/next into instant hits. Five minutes keeps a stale link from
+// outliving a session by much, and a link that does expire early is recovered
+// by the 403 re-resolve in the stream handler rather than by the TTL.
+const streamCacheTTL = 300 * time.Second
 
 type streamCacheEntry struct {
 	target  StreamTarget
@@ -244,6 +246,12 @@ func targetFor(f ytdlpFormat, info ytdlpInfo) StreamTarget {
 	}
 }
 
+// InvalidateStream drops a cached CDN link that the upstream has since
+// rejected, so the next StreamTarget call resolves a fresh one.
+func (e *Extractor) InvalidateStream(providerID, pid string) {
+	e.streamCache.Delete(providerID + ":" + pid)
+}
+
 func (e *Extractor) cacheStream(cacheKey string, target StreamTarget) StreamTarget {
 	e.streamCache.Store(cacheKey, streamCacheEntry{target: target, expires: time.Now().Add(streamCacheTTL)})
 	return target
@@ -273,6 +281,13 @@ func scoreFormat(f ytdlpFormat) float64 {
 		s += 900_000
 	} else if f.Ext == "webm" || f.ACodec == "opus" {
 		s -= 100_000
+	}
+	// An HLS playlist has to be remuxed before it can be played, which costs the
+	// listener 10-30s on the first play. SoundCloud offers a progressive URL
+	// alongside the playlist for many tracks; taking it keeps playback on the
+	// fast proxy path.
+	if isHLS(f.Protocol, f.URL) {
+		s -= 500_000
 	}
 	return s
 }

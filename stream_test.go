@@ -105,6 +105,112 @@ func TestStreamProxyHonoursClientRange(t *testing.T) {
 	}
 }
 
+// Time to first audio byte is one upstream round trip, not two: the old
+// bytes=0-0 size probe added seconds of silence before playback started.
+func TestStreamProxySkipsSizeProbe(t *testing.T) {
+	body := payload(3 << 20) // fits in a single chunk
+	var requests int32
+	var ranges []string
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		spec := r.Header.Get("Range")
+		ranges = append(ranges, spec)
+		var start, end int64
+		if _, err := fmt.Sscanf(strings.TrimPrefix(spec, "bytes="), "%d-%d", &start, &end); err != nil {
+			http.Error(w, "bad range", http.StatusBadRequest)
+			return
+		}
+		if end >= int64(len(body)) {
+			end = int64(len(body)) - 1
+		}
+		w.Header().Set("Content-Type", "audio/mp4")
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(body[start : end+1])
+	}))
+	defer cdn.Close()
+
+	app := streamApp(t, cdn.URL)
+	rec := httptest.NewRecorder()
+	streamThrough(t, app, rec, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if !bytesEqual(rec.Body.Bytes(), body) {
+		t.Fatal("delivered bytes do not match the source")
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("expected a single upstream request, got %d (%v)", got, ranges)
+	}
+	if ranges[0] == "bytes=0-0" {
+		t.Fatal("first upstream request is still a size probe")
+	}
+	if got, want := rec.Header().Get("Content-Length"), fmt.Sprint(len(body)); got != want {
+		t.Fatalf("Content-Length = %q, want %q", got, want)
+	}
+}
+
+// A CDN link that expired while the listener was paused must be re-resolved
+// instead of surfacing as a dead player.
+func TestStreamProxyReresolvesAfterUpstream403(t *testing.T) {
+	body := payload(1 << 20)
+	var requests int32
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&requests, 1) == 1 {
+			http.Error(w, "expired", http.StatusForbidden)
+			return
+		}
+		var start, end int64
+		if _, err := fmt.Sscanf(strings.TrimPrefix(r.Header.Get("Range"), "bytes="), "%d-%d", &start, &end); err != nil {
+			http.Error(w, "bad range", http.StatusBadRequest)
+			return
+		}
+		if end >= int64(len(body)) {
+			end = int64(len(body)) - 1
+		}
+		w.Header().Set("Content-Type", "audio/mp4")
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(body[start : end+1])
+	}))
+	defer cdn.Close()
+
+	app := streamApp(t, cdn.URL)
+	rec := httptest.NewRecorder()
+	streamThrough(t, app, rec, "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after re-resolve, got %d", rec.Code)
+	}
+	if !bytesEqual(rec.Body.Bytes(), body) {
+		t.Fatal("delivered bytes do not match the source")
+	}
+}
+
+func TestParseRangeHint(t *testing.T) {
+	cases := []struct {
+		header     string
+		start, end int64
+		ok         bool
+	}{
+		{"", 0, -1, true},
+		{"bytes=0-99", 0, 99, true},
+		{"bytes=500-", 500, -1, true},
+		{"bytes=-100", 0, 0, false}, // needs the total, falls back to probing
+		{"bytes=abc", 0, 0, false},
+		{"bytes=0-99,200-299", 0, 0, false},
+		{"bytes=99-9", 0, 0, false},
+	}
+	for _, c := range cases {
+		start, end, ok := parseRangeHint(c.header)
+		if start != c.start || end != c.end || ok != c.ok {
+			t.Errorf("parseRangeHint(%q) = (%d,%d,%v), want (%d,%d,%v)",
+				c.header, start, end, ok, c.start, c.end, c.ok)
+		}
+	}
+}
+
 func TestParseRange(t *testing.T) {
 	const total = 1000
 	cases := []struct {

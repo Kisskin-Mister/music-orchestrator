@@ -7,6 +7,7 @@ import '../state/library_controller.dart';
 import '../state/player_controller.dart';
 import '../theme/tokens.dart';
 import '../widgets/playlist_art.dart';
+import '../widgets/track_art.dart';
 import '../widgets/track_row.dart';
 
 class PlaylistDetailScreen extends StatefulWidget {
@@ -78,12 +79,39 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     }
   }
 
+  /// Filling a playlist used to mean leaving it, finding the track in Search
+  /// and using its menu. The sheet is the same flow the web PlaylistCard got:
+  /// search scoped to this playlist, add without losing your place.
+  Future<void> _addTracks() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.sheet),
+        ),
+      ),
+      builder: (context) => _AddTrackSheet(
+        playlistId: _playlist.id,
+        existingIds: _tracks.map((track) => track.id).toSet(),
+      ),
+    );
+    if (!mounted) return;
+    await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     final library = context.watch<LibraryController>();
     final player = context.watch<PlayerController>();
     final tracks = _tracks;
     return Scaffold(
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addTracks,
+        tooltip: 'Добавить трек',
+        child: const Icon(Icons.add),
+      ),
       appBar: AppBar(
         title: const Text('Плейлист'),
         backgroundColor: AppColors.bg,
@@ -102,7 +130,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+        // Bottom pad clears the "+" button so it never sits on the last row.
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 96),
         children: [
           Center(
             child: SizedBox.square(
@@ -197,6 +226,223 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
               ),
         ],
       ),
+    );
+  }
+}
+
+/// Search-and-add sheet behind the playlist's "+" button. Keeps its own
+/// results rather than going through LibraryController.search(), so opening it
+/// does not wipe out whatever the Search tab is showing.
+class _AddTrackSheet extends StatefulWidget {
+  const _AddTrackSheet({required this.playlistId, required this.existingIds});
+
+  final String playlistId;
+  final Set<String> existingIds;
+
+  @override
+  State<_AddTrackSheet> createState() => _AddTrackSheetState();
+}
+
+class _AddTrackSheetState extends State<_AddTrackSheet> {
+  final _controller = TextEditingController();
+  List<Track> _results = [];
+  final Set<String> _added = {};
+  bool _searching = false;
+  bool _searched = false;
+  String? _error;
+  String? _addingId;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() async {
+    final query = _controller.text.trim();
+    if (query.isEmpty || _searching) return;
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
+    try {
+      final found = await context.read<LibraryController>().searchTracks(query);
+      if (!mounted) return;
+      setState(() {
+        _results = found;
+        _searching = false;
+        _searched = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _searched = true;
+        _error = 'Поиск не удался. Попробуй ещё раз.';
+      });
+    }
+  }
+
+  Future<void> _add(Track track) async {
+    if (_addingId != null) return;
+    setState(() => _addingId = track.id);
+    final library = context.read<LibraryController>();
+    final ok = await library.addPlaylistTrack(widget.playlistId, track.id);
+    if (!mounted) return;
+    setState(() {
+      _addingId = null;
+      if (ok) _added.add(track.id);
+    });
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(library.actionError ?? 'Не удалось добавить трек'),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      // Lifts the sheet above the keyboard the search field just opened.
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Добавить трек',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Закрыть',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _controller,
+                autofocus: true,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _search(),
+                decoration: InputDecoration(
+                  hintText: 'Название или исполнитель',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searching
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          tooltip: 'Найти',
+                          onPressed: _search,
+                          icon: const Icon(Icons.arrow_forward_rounded),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.42,
+                ),
+                child: _body(context),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _body(BuildContext context) {
+    if (_error != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Text(_error!, style: Theme.of(context).textTheme.bodySmall),
+      );
+    }
+    if (_results.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Text(
+          _searched
+              ? 'Ничего не нашлось — попробуй другой запрос.'
+              : 'Введи название и нажми поиск.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+    return ListView.separated(
+      shrinkWrap: true,
+      itemCount: _results.length,
+      separatorBuilder: (context, index) => const SizedBox(height: 6),
+      itemBuilder: (context, index) {
+        final track = _results[index];
+        final already =
+            widget.existingIds.contains(track.id) || _added.contains(track.id);
+        return Row(
+          children: [
+            SizedBox.square(
+              dimension: 44,
+              child: TrackArt(track: track),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    track.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${track.artist ?? 'Исполнитель не указан'} · ${formatDuration(track.durationSeconds)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (_addingId == track.id)
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              IconButton(
+                tooltip: already ? 'Уже в плейлисте' : 'Добавить',
+                onPressed: already ? null : () => _add(track),
+                icon: Icon(
+                  already ? Icons.check_rounded : Icons.add_rounded,
+                  color: already
+                      ? Theme.of(context).colorScheme.primary
+                      : AppColors.muted,
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

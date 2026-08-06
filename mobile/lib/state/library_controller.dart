@@ -28,8 +28,24 @@ class LibraryController extends ChangeNotifier {
   String searchQuery = '';
   List<Track> searchResults = [];
   LoadState searchState = LoadState.idle;
+  int searchTotal = 0;
+  bool searchLoadingMore = false;
   Set<String> downloadingIds = {};
   String? actionError;
+
+  static const int searchPageSize = 20;
+
+  /// Raw items the server has handed us so far — the offset of the next page.
+  /// Counted before the `local` filter below, otherwise dropping a local track
+  /// would shift every following page by one and lose results.
+  int _searchFetched = 0;
+
+  /// Bumped on every new query so a page that lands late cannot append itself
+  /// to the results of a query the user has already replaced.
+  int _searchGeneration = 0;
+
+  bool get canLoadMoreResults =>
+      searchState == LoadState.loaded && _searchFetched < searchTotal;
 
   Set<String> get favoriteIds => favorites.map((t) => t.id).toSet();
   Set<String> get downloadedIds => downloads.map((t) => t.id).toSet();
@@ -169,6 +185,10 @@ class LibraryController extends ChangeNotifier {
 
   Future<void> search(String query) async {
     searchQuery = query;
+    final generation = ++_searchGeneration;
+    searchTotal = 0;
+    _searchFetched = 0;
+    searchLoadingMore = false;
     if (query.trim().isEmpty) {
       searchResults = [];
       searchState = LoadState.idle;
@@ -181,15 +201,79 @@ class LibraryController extends ChangeNotifier {
       final result = await _api.search(
         query,
         providerIds: selectedProviderIds.toList(),
+        limit: searchPageSize,
+        offset: 0,
       );
+      if (generation != _searchGeneration) return;
       searchResults = result.items
           .where((track) => track.providerId != 'local')
           .toList();
+      _searchFetched = result.items.length;
+      // A total the server cannot actually deliver would make the scroll
+      // sentinel refetch the same empty page forever, so an empty first page
+      // ends pagination regardless of what `total` claims.
+      searchTotal = result.items.isEmpty ? 0 : result.total;
       searchState = LoadState.loaded;
     } catch (_) {
+      if (generation != _searchGeneration) return;
       searchState = LoadState.error;
     }
     notifyListeners();
+  }
+
+  /// Appends the next page to [searchResults]. Called from the search screen
+  /// as the list end comes into view; safe to call repeatedly — it no-ops
+  /// while a page is in flight or once every result has been fetched.
+  Future<void> loadMoreResults() async {
+    if (searchLoadingMore || !canLoadMoreResults) return;
+    final generation = _searchGeneration;
+    searchLoadingMore = true;
+    notifyListeners();
+    try {
+      final result = await _api.search(
+        searchQuery,
+        providerIds: selectedProviderIds.toList(),
+        limit: searchPageSize,
+        offset: _searchFetched,
+      );
+      if (generation != _searchGeneration) return;
+      if (result.items.isEmpty) {
+        searchTotal = _searchFetched;
+      } else {
+        _searchFetched += result.items.length;
+        searchTotal = result.total;
+        // Providers can repeat a track across pages; `seen.add` returning
+        // false drops both those and any duplicate inside this page.
+        final seen = searchResults.map((track) => track.id).toSet();
+        searchResults = [
+          ...searchResults,
+          ...result.items.where(
+            (track) => track.providerId != 'local' && seen.add(track.id),
+          ),
+        ];
+      }
+    } catch (_) {
+      // Keep what is already on screen; scrolling again retries the page.
+    } finally {
+      if (generation == _searchGeneration) {
+        searchLoadingMore = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// One-off search that leaves [searchResults] alone — the playlist "add
+  /// track" sheet must not overwrite what the Search tab is showing.
+  Future<List<Track>> searchTracks(String query) async {
+    final result = await _api.search(
+      query,
+      providerIds: selectedProviderIds.toList(),
+      limit: searchPageSize,
+      offset: 0,
+    );
+    return result.items
+        .where((track) => track.providerId != 'local')
+        .toList();
   }
 
   Future<void> toggleFavorite(Track track) async {

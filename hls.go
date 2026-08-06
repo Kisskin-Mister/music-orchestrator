@@ -35,10 +35,14 @@ type hlsCache struct {
 }
 
 func newHLSCache(cfg Config) *hlsCache {
+	timeout := cfg.HLSRemuxTimeout
+	if timeout <= 0 {
+		timeout = cfg.DownloadTimeout
+	}
 	return &hlsCache{
 		dir:     filepath.Join(cfg.MediaRoot, "stream-cache"),
 		ffmpeg:  cfg.FFmpegBinary,
-		timeout: cfg.DownloadTimeout,
+		timeout: timeout,
 	}
 }
 
@@ -94,6 +98,7 @@ func (c *hlsCache) materialize(ctx context.Context, trackID string, target Strea
 	defer lock.Unlock()
 
 	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+		slog.Debug("hls cache hit", "track", trackID, "bytes", info.Size(), "container", container.ext)
 		return path, container, nil
 	}
 	if err := os.MkdirAll(c.dir, 0755); err != nil {
@@ -117,10 +122,19 @@ func (c *hlsCache) materialize(ctx context.Context, trackID string, target Strea
 	args = append(args, container.args...)
 	args = append(args, tmp)
 
+	slog.Info("hls remux started", "track", trackID, "container", container.ext, "codec", target.ACodec, "timeout", c.timeout)
+	started := time.Now()
 	cmd := exec.CommandContext(runCtx, c.ffmpeg, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		// A cancelled runCtx with a live parent context means ffmpeg hit the
+		// remux deadline rather than the listener closing the tab, and the
+		// distinction is the difference between a bug report and a skip.
+		if runCtx.Err() != nil && ctx.Err() == nil {
+			slog.Warn("hls remux timed out", "track", trackID, "elapsed", time.Since(started), "timeout", c.timeout)
+			return "", container, fmt.Errorf("ffmpeg remux timed out after %s", c.timeout)
+		}
 		return "", container, fmt.Errorf("ffmpeg remux failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	info, err := os.Stat(tmp)
@@ -133,7 +147,7 @@ func (c *hlsCache) materialize(ctx context.Context, trackID string, target Strea
 	if err := os.Rename(tmp, path); err != nil {
 		return "", container, err
 	}
-	slog.Info("hls remuxed", "track", trackID, "bytes", info.Size(), "container", container.ext)
+	slog.Info("hls remuxed", "track", trackID, "bytes", info.Size(), "container", container.ext, "elapsed", time.Since(started))
 	return path, container, nil
 }
 
@@ -157,25 +171,27 @@ func ffmpegHeaders(headers map[string]string) string {
 // serveHLS hands the remuxed file to http.ServeContent, which supplies range
 // support, conditional requests and Content-Length without further work here.
 func (a *App) serveHLS(w http.ResponseWriter, r *http.Request, trackID string, target StreamTarget) {
+	providerID, _, _ := splitTrackID(trackID)
+	message := unavailableMessage(providerID)
 	path, container, err := a.hls.materialize(r.Context(), trackID, target)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
 		}
 		slog.Warn("hls remux failed", "track", trackID, "error", err)
-		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+		writeError(w, http.StatusBadGateway, message)
 		return
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		slog.Warn("hls cache read failed", "track", trackID, "error", err)
-		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+		writeError(w, http.StatusBadGateway, message)
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+		writeError(w, http.StatusBadGateway, message)
 		return
 	}
 	w.Header().Set("Content-Type", container.contentType)

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/library_controller.dart';
@@ -15,11 +16,35 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final _controller = TextEditingController();
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Fetch the next page one screen-ish early, so the list keeps growing
+  /// before the user actually reaches the bottom. loadMoreResults() ignores
+  /// calls it cannot serve, so firing on every scroll tick is fine.
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (position.pixels < position.maxScrollExtent - 200) return;
+    // A scroll position can notify while the sliver is still laying out, and
+    // loadMoreResults() notifies its listeners synchronously — off a microtask
+    // that rebuild always lands after the current frame instead of inside it.
+    scheduleMicrotask(() {
+      if (mounted) context.read<LibraryController>().loadMoreResults();
+    });
   }
 
   @override
@@ -31,6 +56,7 @@ class _SearchScreenState extends State<SearchScreen> {
         .toList();
 
     return CustomScrollView(
+      controller: _scrollController,
       slivers: [
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
@@ -112,8 +138,22 @@ class _SearchScreenState extends State<SearchScreen> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
             sliver: SliverList.builder(
-              itemCount: library.searchResults.length,
+              itemCount:
+                  library.searchResults.length +
+                  (library.searchLoadingMore ? 1 : 0),
               itemBuilder: (context, index) {
+                if (index >= library.searchResults.length) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: Center(
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  );
+                }
                 final track = library.searchResults[index];
                 return TrackRow(
                   track: track,

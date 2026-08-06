@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -315,15 +316,37 @@ func (a *App) deleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxSearchResults bounds how deep paging can go. Every page re-runs yt-dlp for
+// offset+limit results, so this is as much a ceiling on the Pi's memory and
+// patience as it is on the result list.
+const maxSearchResults = 200
+
 func (a *App) search(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	limit := queryInt(r, "limit", 20)
 	offset := queryInt(r, "offset", 0)
-	if limit < 1 || limit > 50 {
+	if limit < 1 {
 		limit = 20
 	}
+	if limit > maxSearchResults {
+		limit = maxSearchResults
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxSearchResults {
+		offset = maxSearchResults
+	}
+	// Fetching one item past the page is what tells the client whether to keep
+	// scrolling. The providers have no notion of a grand total — yt-dlp only
+	// returns as many hits as it was asked for — so "there was one more than
+	// this page" is the only honest signal, and it costs a single extra result.
+	fetch := offset + limit + 1
+	if fetch > maxSearchResults {
+		fetch = maxSearchResults
+	}
 	providers := splitCSV(r.URL.Query().Get("providers"))
-	items := a.providers.Search(q, providers, limit+offset)
+	items := a.providers.Search(q, providers, fetch)
 	items = a.annotateTracks(a.optionalUserIDFromRequest(r), items)
 	total := len(items)
 	if offset > len(items) {
@@ -444,7 +467,7 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	target, err := a.providers.extractor.StreamTarget(providerID, pid)
 	if err != nil {
 		slog.Warn("stream resolve failed", "track", id, "error", err)
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, unavailableMessage(providerID))
 		return
 	}
 
@@ -454,14 +477,44 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, contentType, err := a.probeUpstream(r.Context(), target.URL, target.Headers)
-	if err != nil {
-		slog.Warn("stream probe failed", "track", id, "error", err)
-		writeError(w, http.StatusBadGateway, "Audio source is unavailable")
-		return
+	// The first chunk request doubles as the size probe: its Content-Range
+	// carries the full length. A separate bytes=0-0 probe used to cost an extra
+	// round trip to the CDN — seconds of silence before any audio moved — and
+	// bought nothing the first chunk does not already report.
+	var (
+		total       int64
+		contentType string
+		firstChunk  *http.Response
+	)
+	rangeHeader := r.Header.Get("Range")
+	if hintStart, hintEnd, ok := parseRangeHint(rangeHeader); ok {
+		chunkEnd := hintStart + upstreamChunkSize - 1
+		if hintEnd >= 0 && hintEnd < chunkEnd {
+			chunkEnd = hintEnd
+		}
+		resp, refreshed, size, err := a.openUpstream(r.Context(), providerID, pid, target, hintStart, chunkEnd)
+		if err != nil {
+			slog.Warn("stream open failed", "track", id, "error", err)
+			writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+			return
+		}
+		firstChunk, target, total, contentType = resp, refreshed, size, resp.Header.Get("Content-Type")
+		defer func() {
+			_, _ = io.Copy(io.Discard, firstChunk.Body)
+			_ = firstChunk.Body.Close()
+		}()
+	} else {
+		// Suffix ranges ("bytes=-500") are relative to a size we do not know yet,
+		// so those keep paying for the probe.
+		total, contentType, err = a.probeUpstream(r.Context(), target.URL, target.Headers)
+		if err != nil {
+			slog.Warn("stream probe failed", "track", id, "error", err)
+			writeError(w, http.StatusBadGateway, "Audio source is unavailable")
+			return
+		}
 	}
 
-	start, end, partial, ok := parseRange(r.Header.Get("Range"), total)
+	start, end, partial, ok := parseRange(rangeHeader, total)
 	if !ok {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", total))
 		writeError(w, http.StatusRequestedRangeNotSatisfiable, "Invalid range")
@@ -487,7 +540,23 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flusher, _ := w.(http.Flusher)
-	for offset := start; offset <= end; {
+	offset := start
+	if firstChunk != nil {
+		// Already in flight from the size probe — hand it to the listener before
+		// asking the CDN for anything else.
+		n, err := io.Copy(w, io.LimitReader(firstChunk.Body, end-offset+1))
+		if n > 0 && flusher != nil {
+			flusher.Flush()
+		}
+		if err != nil {
+			if r.Context().Err() == nil {
+				slog.Warn("stream first chunk failed", "track", id, "offset", offset, "error", err)
+			}
+			return
+		}
+		offset += n
+	}
+	for offset <= end {
 		chunkEnd := offset + upstreamChunkSize - 1
 		if chunkEnd > end {
 			chunkEnd = end
@@ -507,6 +576,121 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 		}
 		offset += n
 	}
+}
+
+// unavailableMessage names the source the listener actually chose, so a failure
+// points at the provider to retry rather than at "audio".
+func unavailableMessage(providerID string) string {
+	switch providerID {
+	case "soundcloud_stream":
+		return "SoundCloud track unavailable"
+	case "youtube_stream":
+		return "YouTube track unavailable"
+	default:
+		return "Audio source is unavailable"
+	}
+}
+
+// upstreamStatusError carries the CDN's own status so the caller can tell an
+// expired link (403) from a rate limit (429) or a genuinely broken source.
+type upstreamStatusError struct {
+	code   int
+	status string
+}
+
+func (e upstreamStatusError) Error() string { return "upstream returned " + e.status }
+
+// openUpstream fetches the first chunk and reports the object's full size,
+// re-resolving the source once if the CDN link has expired. googlevideo answers
+// 403 for a stale URL, which is what a listener hits after pausing for hours.
+// The possibly-refreshed target is returned so the rest of the chunk loop uses
+// the new URL rather than the dead one.
+func (a *App) openUpstream(ctx context.Context, providerID, pid string, target StreamTarget, start, end int64) (*http.Response, StreamTarget, int64, error) {
+	resp, total, err := openUpstreamChunk(ctx, target.URL, target.Headers, start, end)
+	if err == nil {
+		return resp, target, total, nil
+	}
+	var status upstreamStatusError
+	if !errors.As(err, &status) || status.code != http.StatusForbidden {
+		return nil, target, 0, err
+	}
+	a.providers.extractor.InvalidateStream(providerID, pid)
+	fresh, resolveErr := a.providers.extractor.StreamTarget(providerID, pid)
+	if resolveErr != nil {
+		return nil, target, 0, err
+	}
+	resp, total, err = openUpstreamChunk(ctx, fresh.URL, fresh.Headers, start, end)
+	if err != nil {
+		return nil, target, 0, err
+	}
+	return resp, fresh, total, nil
+}
+
+// openUpstreamChunk starts one ranged request and leaves the body open for the
+// caller to stream. The size comes from Content-Range, so no separate probe is
+// needed. A CDN that ignores ranges answers 200; that is only usable from the
+// start of the file, and its Content-Length is then the whole size.
+func openUpstreamChunk(ctx context.Context, target string, headers map[string]string, start, end int64) (*http.Response, int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	applyUpstreamHeaders(req, headers)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	switch {
+	case resp.StatusCode == http.StatusPartialContent:
+		_, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || total <= 0 {
+			discardResponse(resp)
+			return nil, 0, fmt.Errorf("upstream did not report a size")
+		}
+		return resp, total, nil
+	case resp.StatusCode == http.StatusOK && start == 0 && resp.ContentLength > 0:
+		return resp, resp.ContentLength, nil
+	default:
+		discardResponse(resp)
+		return nil, 0, upstreamStatusError{code: resp.StatusCode, status: resp.Status}
+	}
+}
+
+func discardResponse(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+}
+
+// parseRangeHint reports the first byte the client asked for — and the last one
+// when the client named it — without knowing the object size. That is what lets
+// the first upstream request double as the size probe. Suffix ranges
+// ("bytes=-500") are relative to the size, so they cannot be resolved here.
+func parseRangeHint(header string) (start, end int64, ok bool) {
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "" {
+		return 0, -1, true
+	}
+	spec, found := strings.CutPrefix(trimmed, "bytes=")
+	if !found || strings.Contains(spec, ",") {
+		return 0, 0, false
+	}
+	fromText, toText, found := strings.Cut(spec, "-")
+	if !found || fromText == "" {
+		return 0, 0, false
+	}
+	start, err := strconv.ParseInt(fromText, 10, 64)
+	if err != nil || start < 0 {
+		return 0, 0, false
+	}
+	if toText == "" {
+		return start, -1, true
+	}
+	end, err = strconv.ParseInt(toText, 10, 64)
+	if err != nil || end < start {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 // probeUpstream asks for a single byte to learn the full length from

@@ -23,6 +23,7 @@ type Config struct {
 	FFmpegBinary          string
 	ExtractorTimeout      time.Duration
 	DownloadTimeout       time.Duration
+	HLSRemuxTimeout       time.Duration
 	YouTubeAPIKey         string
 	SoundCloudClientID    string
 	NavidromeBaseURL      string
@@ -46,13 +47,17 @@ func LoadConfig() Config {
 		FFmpegBinary:          env("APP_FFMPEG_BINARY", "ffmpeg"),
 		ExtractorTimeout:      time.Duration(envInt("APP_EXTRACTOR_TIMEOUT_SECONDS", 30)) * time.Second,
 		DownloadTimeout:       time.Duration(envInt("APP_DOWNLOAD_TIMEOUT_SECONDS", 600)) * time.Second,
-		YouTubeAPIKey:         env("APP_YOUTUBE_API_KEY", ""),
-		SoundCloudClientID:    env("APP_SOUNDCLOUD_CLIENT_ID", ""),
-		NavidromeBaseURL:      env("APP_NAVIDROME_BASE_URL", ""),
-		NavidromeUsername:     env("APP_NAVIDROME_USERNAME", ""),
-		NavidromeToken:        env("APP_NAVIDROME_TOKEN", ""),
-		SessionTTLHours:       envInt("APP_SESSION_TTL_HOURS", 72),
-		SecureCookies:         envBool("APP_SECURE_COOKIES", false),
+		// A remux runs while the listener stares at a spinner, so it must fail
+		// far sooner than a background download. Two minutes covers a long DJ mix
+		// on a Pi without holding the request open for ten.
+		HLSRemuxTimeout:    time.Duration(envInt("APP_HLS_REMUX_TIMEOUT_SECONDS", 120)) * time.Second,
+		YouTubeAPIKey:      env("APP_YOUTUBE_API_KEY", ""),
+		SoundCloudClientID: env("APP_SOUNDCLOUD_CLIENT_ID", ""),
+		NavidromeBaseURL:   env("APP_NAVIDROME_BASE_URL", ""),
+		NavidromeUsername:  env("APP_NAVIDROME_USERNAME", ""),
+		NavidromeToken:     env("APP_NAVIDROME_TOKEN", ""),
+		SessionTTLHours:    envInt("APP_SESSION_TTL_HOURS", 72),
+		SecureCookies:      envBool("APP_SECURE_COOKIES", false),
 	}
 	cfg.APIKeys = map[string]bool{}
 	for _, key := range strings.Split(env("APP_API_KEYS", "change-me-local-dev-key"), ",") {

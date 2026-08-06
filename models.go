@@ -32,13 +32,15 @@ type Provider struct {
 }
 
 type Track struct {
-	ID               string       `json:"id"`
-	ProviderID       string       `json:"provider_id"`
-	ProviderTrackID  string       `json:"provider_track_id"`
-	Title            string       `json:"title"`
-	Artist           string       `json:"artist,omitempty"`
-	Album            string       `json:"album,omitempty"`
-	DurationSeconds  int          `json:"duration_seconds,omitempty"`
+	ID              string `json:"id"`
+	ProviderID      string `json:"provider_id"`
+	ProviderTrackID string `json:"provider_track_id"`
+	Title           string `json:"title"`
+	Artist          string `json:"artist,omitempty"`
+	Album           string `json:"album,omitempty"`
+	// Always emitted, even when 0: clients treat a missing field as "unknown"
+	// and need the explicit 0 to fall back to the media element duration.
+	DurationSeconds  int          `json:"duration_seconds"`
 	ArtworkURL       string       `json:"artwork_url,omitempty"`
 	SourceURL        string       `json:"source_url,omitempty"`
 	Attribution      string       `json:"attribution,omitempty"`

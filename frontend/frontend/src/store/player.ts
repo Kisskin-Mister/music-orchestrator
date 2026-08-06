@@ -6,6 +6,12 @@ import type { Playback, Track } from '@/api/types';
 // и audio element рапортует примерно двойную длину.
 export const OVERREPORTED_DURATION_RATIO = 1.3;
 
+// Без provider metadata завышение видно только по самой длительности: удвоенный
+// трек попадает в 300..1200s. Ниже 300s удваивать нечего, выше 1200s это скорее
+// всего подкаст или микс — их резать нельзя.
+export const HALVING_MIN_MEDIA_SECONDS = 300;
+export const HALVING_MAX_MEDIA_SECONDS = 1200;
+
 // Реальная длительность из audio element важнее provider metadata:
 // поисковая выдача yt-dlp иногда отдаёт duration другого ролика.
 // Исключение — случай выше: там завышен именно audio element, и провайдер прав.
@@ -13,7 +19,10 @@ export function correctedDurationSeconds(providerSeconds: number | undefined, me
   const provider = typeof providerSeconds === 'number' && Number.isFinite(providerSeconds) && providerSeconds > 0 ? Math.round(providerSeconds) : undefined;
   if (typeof mediaSeconds === 'number' && Number.isFinite(mediaSeconds) && mediaSeconds > 0) {
     const media = Math.round(mediaSeconds);
-    if (provider === undefined) return media;
+    if (provider === undefined) {
+      if (media > HALVING_MIN_MEDIA_SECONDS && media <= HALVING_MAX_MEDIA_SECONDS) return Math.round(media / 2);
+      return media;
+    }
     if (media > provider * OVERREPORTED_DURATION_RATIO) return provider;
     if (Math.abs(provider - media) > 1) return media;
     return provider;

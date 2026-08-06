@@ -20,6 +20,23 @@ func TestSoundcloudFallbackURL(t *testing.T) {
 	}
 }
 
+// SoundCloud publishes the same track as an HLS playlist and, often, as a
+// progressive file. The playlist costs a 10-30s ffmpeg remux before the first
+// note, so the plain file has to win even when the playlist carries the codec
+// we otherwise prefer.
+func TestScoreFormatPrefersProgressiveOverHLS(t *testing.T) {
+	hls := ytdlpFormat{URL: "https://cdn.example/a.m3u8", Protocol: "m3u8_native", ACodec: "mp4a.40.2", Ext: "m4a", ABR: 128}
+	progressive := ytdlpFormat{URL: "https://cdn.example/a.mp3", Protocol: "http", ACodec: "mp3", Ext: "mp3", ABR: 128}
+	if scoreFormat(progressive) <= scoreFormat(hls) {
+		t.Fatalf("progressive %v should outrank HLS %v", scoreFormat(progressive), scoreFormat(hls))
+	}
+	// Between two playlists the codec preference still decides.
+	hlsOpus := ytdlpFormat{URL: "https://cdn.example/b.m3u8", Protocol: "m3u8_native", ACodec: "opus", Ext: "webm", ABR: 128}
+	if scoreFormat(hls) <= scoreFormat(hlsOpus) {
+		t.Fatal("AAC playlist should still outrank an Opus playlist")
+	}
+}
+
 func TestStreamSourceCacheServesWithinTTL(t *testing.T) {
 	e := NewExtractor(Config{})
 	e.cacheStream("youtube_stream:abc", StreamTarget{URL: "https://cdn.example/a", Headers: map[string]string{"User-Agent": "x"}})
