@@ -1,6 +1,6 @@
 FROM ghcr.io/cirruslabs/flutter:stable AS build
 WORKDIR /app
-COPY . .
+COPY mobile/ .
 RUN flutter pub get && flutter build web --release
 
 FROM nginx:alpine
