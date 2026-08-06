@@ -28,6 +28,29 @@ type streamCacheEntry struct {
 	expires time.Time
 }
 
+// A search is a cold yt-dlp process — fork plus Python startup plus the network
+// round trip, seconds per call on a Pi — and yt-dlp has no search pagination, so
+// every page re-runs the query from the top. Caching the result set per
+// provider+query makes a repeated query instant, which is what a listener
+// typing, backing out and re-searching actually does. Five minutes is long
+// enough to cover that loop and short enough that a later search is fresh.
+const searchCacheTTL = 300 * time.Second
+
+// searchCacheMaxEntries bounds the map so a long-lived process cannot grow it
+// without limit. Expired entries are swept first; the cap only bites when a
+// burst of distinct queries all arrive inside one TTL.
+const searchCacheMaxEntries = 256
+
+// searchCacheEntry records the depth it was fetched at, because a request for a
+// deeper page than the entry was built from has to miss: yt-dlp was never asked
+// for those results, so serving the short list would end pagination early.
+type searchCacheEntry struct {
+	items   []Track
+	limit   int
+	more    bool
+	expires time.Time
+}
+
 // StreamTarget is one resolved audio source plus what the stream handler needs
 // to decide how to serve it. SoundCloud dropped progressive downloads: every
 // format it offers today is an HLS playlist, which no <audio> element outside
@@ -57,9 +80,13 @@ func isHLS(protocol, rawURL string) bool {
 type Extractor struct {
 	cfg         Config
 	streamCache sync.Map // cacheKey -> streamCacheEntry
+	searchMu    sync.Mutex
+	searchCache map[string]searchCacheEntry // providerID+query -> searchCacheEntry
 }
 
-func NewExtractor(cfg Config) *Extractor { return &Extractor{cfg: cfg} }
+func NewExtractor(cfg Config) *Extractor {
+	return &Extractor{cfg: cfg, searchCache: map[string]searchCacheEntry{}}
+}
 
 type ytdlpInfo struct {
 	ID          string            `json:"id"`
@@ -95,12 +122,22 @@ type ytdlpFormat struct {
 	Protocol    string            `json:"protocol"`
 }
 
-func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error) {
+// Search returns the playable tracks for one page and whether the provider
+// still had results past the ones it was asked for. That second value is the
+// only reliable "keep scrolling" signal: the count of tracks handed back cannot
+// carry it, because filtering live streams, channels and playlist rows out of
+// a full response routinely leaves fewer tracks than were requested, which is
+// indistinguishable from having reached the end of the results.
+func (e *Extractor) Search(providerID, query string, limit int) ([]Track, bool, error) {
 	if !e.cfg.EnableRiskyExtractors {
-		return nil, fmt.Errorf("extractors disabled")
+		return nil, false, fmt.Errorf("extractors disabled")
 	}
 	if limit <= 0 {
 		limit = 10
+	}
+	cacheKey := providerID + "\x00" + query
+	if items, more, ok := e.cachedSearch(cacheKey, limit); ok {
+		return items, more, nil
 	}
 	searchLimit := limit
 	if providerID == "youtube_stream" && searchLimit < 12 {
@@ -108,17 +145,22 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 	}
 	spec := "ytsearch" + fmt.Sprint(searchLimit) + ":" + query
 	if providerID == "soundcloud_stream" {
-		spec = "scsearch" + fmt.Sprint(limit) + ":" + query
+		spec = "scsearch" + fmt.Sprint(searchLimit) + ":" + query
 	}
 	info, err := e.dump(spec, e.cfg.ExtractorTimeout, providerID == "youtube_stream")
 	if err != nil {
 		slog.Warn("yt-dlp search failed", "provider", providerID, "error", err)
-		return nil, err
+		return nil, false, err
 	}
 	entries := info.Entries
 	if len(entries) == 0 {
 		entries = []ytdlpInfo{info}
 	}
+	// A search that comes back as full as it was asked to be was cut off by the
+	// limit, not by running out of hits, so deeper pages exist. Guessing "more"
+	// wrongly costs one extra request that returns nothing; guessing "done"
+	// wrongly strands the listener on page one, so lean towards more.
+	more := len(entries) >= searchLimit
 	if providerID == "youtube_stream" {
 		sort.SliceStable(entries, func(i, j int) bool {
 			return youtubeAudioScore(entries[i], query) > youtubeAudioScore(entries[j], query)
@@ -151,7 +193,59 @@ func (e *Extractor) Search(providerID, query string, limit int) ([]Track, error)
 		}
 		out = append(out, e.toTrack(providerID, pid, it, source))
 	}
-	return out, nil
+	// Filling the page while entries were still unread is the other way to know
+	// the results continue, and it catches the case where yt-dlp was asked for
+	// more than the caller wanted via the YouTube minimum above.
+	if len(out) >= limit && len(entries) > len(out) {
+		more = true
+	}
+	e.storeSearch(cacheKey, limit, out, more)
+	return out, more, nil
+}
+
+// cachedSearch returns a copy of a live entry that was fetched at least as deep
+// as limit. The copy matters: callers annotate the tracks they get back in
+// place, and that must not write through into the cached slice.
+func (e *Extractor) cachedSearch(key string, limit int) ([]Track, bool, bool) {
+	e.searchMu.Lock()
+	defer e.searchMu.Unlock()
+	entry, ok := e.searchCache[key]
+	if !ok || entry.limit < limit || time.Now().After(entry.expires) {
+		return nil, false, false
+	}
+	items, more := entry.items, entry.more
+	if len(items) > limit {
+		// Serving a prefix of a deeper entry: whatever was trimmed is itself
+		// proof that the results continue past this page.
+		items, more = items[:limit], true
+	}
+	return append([]Track(nil), items...), more, true
+}
+
+func (e *Extractor) storeSearch(key string, limit int, items []Track, more bool) {
+	e.searchMu.Lock()
+	defer e.searchMu.Unlock()
+	if e.searchCache == nil {
+		e.searchCache = map[string]searchCacheEntry{}
+	}
+	now := time.Now()
+	for k, v := range e.searchCache {
+		if now.After(v.expires) {
+			delete(e.searchCache, k)
+		}
+	}
+	// Nothing expired and the map is full: evict whatever is closest to expiring
+	// so the query in hand still gets a slot.
+	if len(e.searchCache) >= searchCacheMaxEntries {
+		evictKey, evictAt := "", time.Time{}
+		for k, v := range e.searchCache {
+			if evictKey == "" || v.expires.Before(evictAt) {
+				evictKey, evictAt = k, v.expires
+			}
+		}
+		delete(e.searchCache, evictKey)
+	}
+	e.searchCache[key] = searchCacheEntry{items: append([]Track(nil), items...), limit: limit, more: more, expires: now.Add(searchCacheTTL)}
 }
 
 // scsearch entries occasionally arrive without webpage_url/original_url/url —
@@ -353,7 +447,7 @@ func (e *Extractor) Download(providerID, pid, format, mediaRoot string) (string,
 	tmpl := filepath.Join(mediaRoot, stem+".%(ext)s")
 	ctx, cancel := context.WithTimeout(context.Background(), e.cfg.DownloadTimeout)
 	defer cancel()
-	args := []string{"--no-playlist", "-x", "--audio-format", format, "-o", tmpl, u}
+	args := append(e.jsRuntimeArgs(), "--no-playlist", "-x", "--audio-format", format, "-o", tmpl, u)
 	cmd := exec.CommandContext(ctx, e.cfg.YTDLPBinary, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -372,10 +466,21 @@ func (e *Extractor) Download(providerID, pid, format, mediaRoot string) (string,
 	return filepath.Base(matches[0]), fi.Size(), nil
 }
 
+// jsRuntimeArgs enables a JavaScript runtime for every yt-dlp invocation.
+// Without one yt-dlp warns on each run and falls back to clients that cannot
+// extract some SoundCloud HLS and YouTube formats at all.
+func (e *Extractor) jsRuntimeArgs() []string {
+	rt := strings.TrimSpace(e.cfg.YTDLPJSRuntimes)
+	if rt == "" {
+		return nil
+	}
+	return []string{"--js-runtimes", rt}
+}
+
 func (e *Extractor) dump(spec string, timeoutDur time.Duration, flatPlaylist bool) (ytdlpInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutDur)
 	defer cancel()
-	args := []string{"--no-update", "--retries", "1", "--socket-timeout", "20"}
+	args := append([]string{"--no-update", "--retries", "1", "--socket-timeout", "20"}, e.jsRuntimeArgs()...)
 	if flatPlaylist {
 		args = append(args, "--flat-playlist")
 	}

@@ -20,6 +20,7 @@ type Config struct {
 	PublicMediaBaseURL    string
 	EnableRiskyExtractors bool
 	YTDLPBinary           string
+	YTDLPJSRuntimes       string
 	FFmpegBinary          string
 	ExtractorTimeout      time.Duration
 	DownloadTimeout       time.Duration
@@ -44,9 +45,15 @@ func LoadConfig() Config {
 		PublicMediaBaseURL:    strings.TrimRight(env("APP_PUBLIC_MEDIA_BASE_URL", ""), "/"),
 		EnableRiskyExtractors: envBool("APP_ENABLE_RISKY_EXTRACTORS", false),
 		YTDLPBinary:           env("APP_YT_DLP_BINARY", "yt-dlp"),
-		FFmpegBinary:          env("APP_FFMPEG_BINARY", "ffmpeg"),
-		ExtractorTimeout:      time.Duration(envInt("APP_EXTRACTOR_TIMEOUT_SECONDS", 30)) * time.Second,
-		DownloadTimeout:       time.Duration(envInt("APP_DOWNLOAD_TIMEOUT_SECONDS", 600)) * time.Second,
+		// yt-dlp only enables deno by default, and warns on every run when no
+		// JS runtime is present. Several SoundCloud and YouTube formats need one
+		// to be extracted at all, so point it at node, which ships with the host.
+		// An unavailable or misspelled runtime only costs a warning, so this is
+		// safe to send unconditionally; set the env to empty to drop the flag.
+		YTDLPJSRuntimes:  env("APP_YTDLP_JS_RUNTIMES", "node"),
+		FFmpegBinary:     env("APP_FFMPEG_BINARY", "ffmpeg"),
+		ExtractorTimeout: time.Duration(envInt("APP_EXTRACTOR_TIMEOUT_SECONDS", 30)) * time.Second,
+		DownloadTimeout:  time.Duration(envInt("APP_DOWNLOAD_TIMEOUT_SECONDS", 600)) * time.Second,
 		// A remux runs while the listener stares at a spinner, so it must fail
 		// far sooner than a background download. Two minutes covers a long DJ mix
 		// on a Pi without holding the request open for ten.

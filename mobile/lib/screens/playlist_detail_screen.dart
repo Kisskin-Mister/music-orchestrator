@@ -6,6 +6,7 @@ import '../api/models.dart';
 import '../state/library_controller.dart';
 import '../state/player_controller.dart';
 import '../theme/tokens.dart';
+import '../widgets/mini_player.dart';
 import '../widgets/playlist_art.dart';
 import '../widgets/track_art.dart';
 import '../widgets/track_row.dart';
@@ -107,6 +108,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     final player = context.watch<PlayerController>();
     final tracks = _tracks;
     return Scaffold(
+      // This screen is pushed as its own route, so it covers the shell's
+      // Scaffold and the mini player that lives in the shell's bottom bar.
+      // Carrying one here keeps playback controls reachable while browsing a
+      // playlist instead of making the listener navigate back to reach them.
+      bottomNavigationBar: const MiniPlayer(),
       floatingActionButton: FloatingActionButton(
         onPressed: _addTracks,
         tooltip: 'Добавить трек',

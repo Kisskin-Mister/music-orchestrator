@@ -346,7 +346,7 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 		fetch = maxSearchResults
 	}
 	providers := splitCSV(r.URL.Query().Get("providers"))
-	items := a.providers.Search(q, providers, fetch)
+	items, moreAvailable := a.providers.Search(q, providers, fetch)
 	items = a.annotateTracks(a.optionalUserIDFromRequest(r), items)
 	total := len(items)
 	if offset > len(items) {
@@ -356,6 +356,17 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(items) > limit {
 		items = items[:limit]
+	}
+	// Counting the tracks that survived filtering cannot answer "is there more":
+	// a 21-item fetch that yields 19 playable tracks looks exactly like a search
+	// with only 19 hits, and reporting 19 told a client holding 19 that it had
+	// everything, which killed the infinite scroll after one page. So take the
+	// answer from the providers instead — either they trimmed something off this
+	// page, or they reported still having results past it — and phrase the total
+	// as one past what the client will be holding, which is the only claim the
+	// providers can actually back. An empty next page ends the scroll.
+	if moreAvailable || total > offset+len(items) {
+		total = offset + len(items) + 1
 	}
 	writeJSON(w, http.StatusOK, SearchResponse{Query: q, Limit: limit, Offset: offset, Total: total, Items: items})
 }

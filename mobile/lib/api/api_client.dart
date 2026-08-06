@@ -239,7 +239,10 @@ class ApiClient {
           }),
           headers: _headers,
         )
-        .timeout(const Duration(seconds: 45));
+        // A deep page fans out to two cold yt-dlp processes and re-runs the
+        // query from the top, which on a Pi can outlast 45s and abort a page
+        // the backend was about to return.
+        .timeout(const Duration(seconds: 60));
     _throwIfError(res);
     return SearchResult.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }

@@ -48,7 +48,10 @@ func (p *ProviderService) extractorProvider(id, name, kind string) Provider {
 	return Provider{ID: id, Name: name, Kind: kind, Configured: p.cfg.EnableRiskyExtractors, Enabled: p.cfg.EnableRiskyExtractors, RiskLevel: "risky", Capabilities: Capabilities{Search: p.cfg.EnableRiskyExtractors, Metadata: p.cfg.EnableRiskyExtractors, RawAudioStream: p.cfg.EnableRiskyExtractors, PersistentCache: p.cfg.EnableRiskyExtractors, OfflinePlayback: p.cfg.EnableRiskyExtractors, PublicDeploymentSafe: false}, Policy: Policy{DownloadAllowed: p.cfg.EnableRiskyExtractors, CacheAllowed: p.cfg.EnableRiskyExtractors, RequiresAttribution: true, Notes: []string{"Personal self-hosted mode only. Users are responsible for source terms and law."}}}
 }
 
-func (p *ProviderService) Search(query string, providerIDs []string, limit int) []Track {
+// Search returns up to limit tracks and whether any provider still had results
+// beyond the ones it returned, which is what the HTTP layer turns into the
+// client's "keep scrolling" signal.
+func (p *ProviderService) Search(query string, providerIDs []string, limit int) ([]Track, bool) {
 	if len(providerIDs) == 0 {
 		if p.cfg.EnableRiskyExtractors {
 			providerIDs = []string{"youtube_stream", "soundcloud_stream"}
@@ -67,31 +70,40 @@ func (p *ProviderService) Search(query string, providerIDs []string, limit int) 
 	// another made total latency the sum of both. Fan out and keep the results
 	// in request order so the provider ordering the caller asked for survives.
 	results := make([][]Track, len(extractorIDs))
+	mores := make([]bool, len(extractorIDs))
 	var wg sync.WaitGroup
 	for i, id := range extractorIDs {
 		wg.Add(1)
 		go func(idx int, providerID string) {
 			defer wg.Done()
-			items, err := p.extractor.Search(providerID, query, limit)
+			items, more, err := p.extractor.Search(providerID, query, limit)
 			if err != nil {
 				slog.Warn("provider search failed", "provider", providerID, "error", err)
 				return
 			}
 			results[idx] = items
+			mores[idx] = more
 		}(i, id)
 	}
 	wg.Wait()
+	// One provider with more to give is enough to keep the page count going.
+	more := false
+	for _, m := range mores {
+		more = more || m
+	}
 	out := []Track{}
 	for _, items := range results {
 		if limit > 0 && len(out) >= limit {
+			// A provider's results never got merged in, so there is more.
+			more = true
 			break
 		}
 		out = append(out, items...)
 	}
 	if limit > 0 && len(out) > limit {
-		return out[:limit]
+		return out[:limit], true
 	}
-	return out
+	return out, more
 }
 func localSearch(query string) []Track {
 	q := strings.ToLower(query)

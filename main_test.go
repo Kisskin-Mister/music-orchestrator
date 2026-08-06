@@ -70,6 +70,39 @@ printf 'mock audio' > "$file"
 	return path
 }
 
+// mockYTDLPPaged answers a ytsearchN spec with exactly N entries, the way a
+// real search does when the result list runs deeper than the page asked for.
+// The first entry is a channel, so filtering thins the response to N-1 tracks.
+func mockYTDLPPaged(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "yt-dlp-paged")
+	if runtime.GOOS == "windows" {
+		path += ".bat"
+	}
+	script := `#!/usr/bin/env bash
+set -e
+n=1
+for a in "$@"; do
+  if [[ "$a" == ytsearch*:* ]]; then
+    n="${a#ytsearch}"
+    n="${n%%:*}"
+  fi
+done
+[[ "$n" =~ ^[0-9]+$ ]] || n=1
+out='{"entries":[{"id":"UCFl7yKfcRcFmIUbKeCA-SJQ","title":"Mock Artist Channel","uploader":"Mock Artist","duration":0,"url":"https://www.youtube.com/channel/UCFl7yKfcRcFmIUbKeCA-SJQ","ie_key":"YoutubeTab"}'
+i=1
+while [ "$i" -lt "$n" ]; do
+  out="$out,{\"id\":\"yt$i\",\"title\":\"Mock Song $i\",\"uploader\":\"YT Artist\",\"duration\":200,\"url\":\"https://www.youtube.com/watch?v=yt$i\",\"ie_key\":\"Youtube\"}"
+  i=$((i+1))
+done
+echo "$out]}"
+`
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestHealthProvidersAndOpenAPI(t *testing.T) {
 	app := testApp(t, false)
 	for _, path := range []string{"/health", "/v1/providers", "/openapi.json"} {
@@ -78,6 +111,56 @@ func TestHealthProvidersAndOpenAPI(t *testing.T) {
 		if r.Code != 200 {
 			t.Fatalf("%s got %d", path, r.Code)
 		}
+	}
+}
+
+// A page the providers could not fill is the end of the results, and reporting
+// the real count there is what stops the client's scroll sentinel instead of
+// leaving it asking for pages that will never come.
+func TestSearchShortPageReportsRealTotal(t *testing.T) {
+	app := testApp(t, true)
+	r := httptest.NewRecorder()
+	// The mock yields one usable YouTube video (the other entry is a channel),
+	// so a page of five can never fill.
+	app.ServeHTTP(r, httptest.NewRequest("GET", "/v1/search?q=lofi&providers=youtube_stream&limit=5", nil))
+	if r.Code != 200 {
+		t.Fatalf("search %d: %s", r.Code, r.Body.String())
+	}
+	var sr SearchResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &sr); err != nil {
+		t.Fatal(err)
+	}
+	if len(sr.Items) != 1 {
+		t.Fatalf("want the single usable video, got %d items", len(sr.Items))
+	}
+	if sr.Total != 1 {
+		t.Fatalf("a short page must report the real total, got %d", sr.Total)
+	}
+}
+
+// The infinite scroll used to die on the first page whenever filtering thinned
+// a full response: yt-dlp returned every result it was asked for, a couple were
+// channels or live streams, and the surviving count came back below the page
+// size — which the client could not tell apart from "that was everything".
+func TestSearchFullResponseKeepsPagingAfterFiltering(t *testing.T) {
+	app := testApp(t, true)
+	app.providers.extractor.cfg.YTDLPBinary = mockYTDLPPaged(t)
+	r := httptest.NewRecorder()
+	app.ServeHTTP(r, httptest.NewRequest("GET", "/v1/search?q=lofi&providers=youtube_stream&limit=20", nil))
+	if r.Code != 200 {
+		t.Fatalf("search %d: %s", r.Code, r.Body.String())
+	}
+	var sr SearchResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &sr); err != nil {
+		t.Fatal(err)
+	}
+	// One of the 21 entries yt-dlp returned was a channel, leaving a page that
+	// is one short of what was asked for.
+	if len(sr.Items) != 20 {
+		t.Fatalf("want a 20-track page, got %d", len(sr.Items))
+	}
+	if sr.Total <= len(sr.Items) {
+		t.Fatalf("provider had more results, so total must exceed the page: total %d for %d items", sr.Total, len(sr.Items))
 	}
 }
 
@@ -92,6 +175,8 @@ func TestSearchPlaybackAndDownload(t *testing.T) {
 	if err := json.Unmarshal(r.Body.Bytes(), &sr); err != nil {
 		t.Fatal(err)
 	}
+	// Both mock providers are exhausted at two hits between them, so the total
+	// is the real count and the client stops here.
 	if sr.Total != 2 {
 		t.Fatalf("want 2 results got %d", sr.Total)
 	}
