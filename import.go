@@ -289,7 +289,9 @@ const maxUploadFileSize = 512 << 20
 // let a crafted client write outside it, so only the final component survives
 // and anything still suspicious is rejected.
 func safeUploadName(name string) (string, bool) {
-	base := filepath.Base(filepath.FromSlash(name))
+	// Windows clients may send backslashes, which filepath.Base does not treat
+	// as separators on Unix; normalise first so the base name is really the base.
+	base := filepath.Base(strings.ReplaceAll(name, `\`, "/"))
 	if base == "." || base == ".." || base == string(os.PathSeparator) || strings.TrimSpace(base) == "" {
 		return "", false
 	}

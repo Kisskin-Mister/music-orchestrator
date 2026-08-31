@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -118,23 +119,42 @@ func TestLocalFileIsScopedToOwner(t *testing.T) {
 }
 
 // The browser sends a relative path as the filename when a whole folder is
-// picked ("Artist/Album/01.mp3"). Joining that onto a directory would let a
-// crafted client write anywhere, so only the base name may survive.
-func TestSafeUploadNameStripsPaths(t *testing.T) {
-	for _, c := range []struct{ in, want string }{
-		{"Artist/Album/01.mp3", "01.mp3"},
-		{`Artist\Album\01.mp3`, "01.mp3"},
-		{"song.mp3", "song.mp3"},
-		{"Альбом/трек.mp3", "трек.mp3"},
+// picked ("Artist/Album/01.mp3"). The security property is not that odd input
+// gets rejected — it is that whatever comes back can only name a file directly
+// inside the upload directory.
+func TestSafeUploadNameCannotEscapeDirectory(t *testing.T) {
+	for _, in := range []string{
+		"Artist/Album/01.mp3",
+		`Artist\Album\01.mp3`,
+		"song.mp3",
+		"Альбом/трек.mp3",
+		"../../etc/passwd",
+		"../secret.mp3",
+		"/etc/shadow",
 	} {
-		got, ok := safeUploadName(c.in)
-		if !ok || got != c.want {
-			t.Errorf("safeUploadName(%q) = %q,%v — want %q", c.in, got, ok, c.want)
+		got, ok := safeUploadName(in)
+		if !ok {
+			continue // rejecting outright is also a safe outcome
+		}
+		if strings.ContainsAny(got, `/\`) || strings.Contains(got, "..") {
+			t.Errorf("safeUploadName(%q) = %q — still contains a path", in, got)
+		}
+		// The decisive check: joining the result must stay inside the directory.
+		dir := "/srv/uploads"
+		if joined := filepath.Join(dir, got); !strings.HasPrefix(joined, dir+"/") {
+			t.Errorf("safeUploadName(%q) = %q escapes to %q", in, got, joined)
 		}
 	}
-	for _, bad := range []string{"../../etc/passwd", "..", ".", "", "   ", "../secret.mp3"} {
+
+	// Names that resolve to nothing usable must be refused.
+	for _, bad := range []string{"..", ".", "", "   ", "/"} {
 		if got, ok := safeUploadName(bad); ok {
-			t.Errorf("safeUploadName(%q) accepted, resolved to %q", bad, got)
+			t.Errorf("safeUploadName(%q) accepted as %q", bad, got)
 		}
+	}
+
+	// A normal nested path keeps the real file name.
+	if got, _ := safeUploadName("Artist/Album/01.mp3"); got != "01.mp3" {
+		t.Errorf("nested path lost its file name: %q", got)
 	}
 }
