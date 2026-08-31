@@ -13,6 +13,7 @@ class Track {
   final String providerId;
   final String title;
   final String? artist;
+  final String? album;
   final int? durationSeconds;
   final String? artworkUrl;
   final bool downloaded;
@@ -25,6 +26,7 @@ class Track {
     required this.providerId,
     required this.title,
     this.artist,
+    this.album,
     this.durationSeconds,
     this.artworkUrl,
     this.downloaded = false,
@@ -38,6 +40,7 @@ class Track {
     providerId: j['provider_id'] as String,
     title: j['title'] as String,
     artist: j['artist'] as String?,
+    album: j['album'] as String?,
     durationSeconds: j['duration_seconds'] as int?,
     artworkUrl: j['artwork_url'] as String?,
     downloaded: j['downloaded'] == true,
@@ -55,6 +58,7 @@ class Track {
     providerId: providerId,
     title: title,
     artist: artist,
+    album: album,
     durationSeconds: durationSeconds,
     artworkUrl: artworkUrl,
     downloaded: downloaded ?? this.downloaded,
@@ -68,6 +72,7 @@ class Track {
     'provider_id': providerId,
     'title': title,
     if (artist != null) 'artist': artist,
+    if (album != null) 'album': album,
     if (durationSeconds != null) 'duration_seconds': durationSeconds,
     if (artworkUrl != null) 'artwork_url': artworkUrl,
     'downloaded': downloaded,
@@ -206,4 +211,102 @@ class AppUser {
   AppUser({required this.id, required this.username});
   factory AppUser.fromJson(Map<String, dynamic> j) =>
       AppUser(id: j['id'] as String, username: j['username'] as String);
+}
+
+/// Одна страница медиатеки. Счётчики по источникам приходят с сервера вместе с
+/// треками: считать их на клиенте можно, только притащив всю коллекцию, а это
+/// ровно то, что перестаёт работать на десяти тысячах треков.
+class LibraryPage {
+  final List<Track> tracks;
+  final int total;
+  final int offset;
+  final Map<String, int> sources;
+  LibraryPage({
+    required this.tracks,
+    required this.total,
+    required this.offset,
+    required this.sources,
+  });
+  factory LibraryPage.fromJson(Map<String, dynamic> j) => LibraryPage(
+    tracks: ((j['tracks'] as List?) ?? const [])
+        .map((e) => Track.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    total: j['total'] as int? ?? 0,
+    offset: j['offset'] as int? ?? 0,
+    sources: ((j['sources'] as Map?) ?? const {}).map(
+      (key, value) => MapEntry('$key', (value as num).toInt()),
+    ),
+  );
+}
+
+class ArtistSummary {
+  final String name;
+  final int tracks;
+  final int albums;
+  ArtistSummary({
+    required this.name,
+    required this.tracks,
+    required this.albums,
+  });
+  factory ArtistSummary.fromJson(Map<String, dynamic> j) => ArtistSummary(
+    name: j['name'] as String? ?? '',
+    tracks: j['tracks'] as int? ?? 0,
+    albums: j['albums'] as int? ?? 0,
+  );
+}
+
+class AlbumSummary {
+  final String name;
+  final String artist;
+  final int tracks;
+  final String? cover;
+  AlbumSummary({
+    required this.name,
+    required this.artist,
+    required this.tracks,
+    this.cover,
+  });
+  factory AlbumSummary.fromJson(Map<String, dynamic> j) => AlbumSummary(
+    name: j['name'] as String? ?? '',
+    artist: j['artist'] as String? ?? '',
+    tracks: j['tracks'] as int? ?? 0,
+    cover: j['cover'] as String?,
+  );
+}
+
+/// Итог импорта. `skipped` — единственная часть, которую пользователю важно
+/// увидеть подробно: DRM-файлы и прочее, что не взяли, иначе исчезает молча.
+class ImportResult {
+  final int scanned;
+  final int imported;
+  final int duplicate;
+  final List<({String path, String reason})> skipped;
+  ImportResult({
+    required this.scanned,
+    required this.imported,
+    required this.duplicate,
+    required this.skipped,
+  });
+  factory ImportResult.fromJson(Map<String, dynamic> j) => ImportResult(
+    scanned: j['scanned'] as int? ?? 0,
+    imported: j['imported'] as int? ?? 0,
+    duplicate: j['duplicate'] as int? ?? 0,
+    skipped: ((j['skipped'] as List?) ?? const [])
+        .map(
+          (e) => (
+            path: (e as Map<String, dynamic>)['path'] as String? ?? '',
+            reason: e['reason'] as String? ?? '',
+          ),
+        )
+        .toList(),
+  );
+}
+
+/// Файл, выбранный пользователем для импорта. На телефоне file_picker отдаёт
+/// путь, в вебе — байты, поэтому API-клиент принимает и то и другое.
+class UploadFile {
+  final String name;
+  final String? path;
+  final List<int>? bytes;
+  UploadFile({required this.name, this.path, this.bytes});
 }

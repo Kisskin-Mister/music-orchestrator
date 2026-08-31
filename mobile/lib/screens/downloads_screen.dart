@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/library_controller.dart';
 import '../state/offline_controller.dart';
+import '../services/folder_import.dart';
 import '../state/player_controller.dart';
 import '../theme/tokens.dart';
+import '../widgets/import_sheet.dart';
+import '../widgets/pill_tabs.dart';
 import '../widgets/track_row.dart';
 
 /// Downloads live in two different places and the difference is not cosmetic:
@@ -56,11 +59,21 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   ).textTheme.headlineLarge?.copyWith(fontSize: 40),
                 ),
                 const SizedBox(height: 16),
-                _Segments(
-                  showDevice: _showDevice,
-                  deviceCount: deviceTracks.length,
-                  serverCount: serverTracks.length,
-                  onChanged: (value) => setState(() => _showDevice = value),
+                PillTabs(
+                  index: _showDevice ? 0 : 1,
+                  onChanged: (i) => setState(() => _showDevice = i == 0),
+                  tabs: [
+                    PillTab(
+                      icon: Icons.phone_iphone_rounded,
+                      label: 'На устройстве',
+                      count: deviceTracks.length,
+                    ),
+                    PillTab(
+                      icon: Icons.cloud_done_rounded,
+                      label: 'На сервере',
+                      count: serverTracks.length,
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 Text(
@@ -70,6 +83,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 if (_showDevice) _UsageLine(offline: offline),
+                const SizedBox(height: 16),
+                const _ImportButton(),
               ],
             ),
           ),
@@ -132,141 +147,55 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
 }
 
-/// A pill switch with a sliding indicator instead of Material's default
-/// SegmentedButton: its selected state uses `secondaryContainer`, which on this
-/// dark theme lands as dark-grey-on-grey and reads as disabled rather than
-/// chosen. Here the active half carries the accent, so which tab is live is
-/// obvious at a glance.
-class _Segments extends StatelessWidget {
-  const _Segments({
-    required this.showDevice,
-    required this.deviceCount,
-    required this.serverCount,
-    required this.onChanged,
-  });
-  final bool showDevice;
-  final int deviceCount;
-  final int serverCount;
-  final ValueChanged<bool> onChanged;
+/// Своя музыка попадает в медиатеку отсюда же, где лежит скачанная: для
+/// пользователя это один вопрос — «что у меня есть офлайн», — и разводить его
+/// по разным экранам не за что.
+class _ImportButton extends StatelessWidget {
+  const _ImportButton();
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppColors.surface2,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Stack(
-        children: [
-          AnimatedAlign(
-            duration: const Duration(milliseconds: 240),
-            curve: Curves.easeOutCubic,
-            alignment: showDevice
-                ? Alignment.centerLeft
-                : Alignment.centerRight,
-            child: FractionallySizedBox(
-              widthFactor: 0.5,
-              heightFactor: 1,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: scheme.primary,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-            ),
+    final accent = Theme.of(context).colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => showImportSheet(context),
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.10),
+            border: Border.all(color: accent.withValues(alpha: 0.35)),
+            borderRadius: BorderRadius.circular(AppRadius.card),
           ),
-          Row(
+          child: Row(
             children: [
+              Icon(Icons.upload_rounded, color: accent, size: 21),
+              const SizedBox(width: 12),
               Expanded(
-                child: _Segment(
-                  icon: Icons.phone_iphone_rounded,
-                  label: 'На устройстве',
-                  count: deviceCount,
-                  selected: showDevice,
-                  onTap: () => onChanged(true),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Импортировать музыку',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      folderImportSupported
+                          ? 'Файлы или папку целиком — со вложенными'
+                          : 'Выбери файлы со своего устройства',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
                 ),
               ),
-              Expanded(
-                child: _Segment(
-                  icon: Icons.cloud_done_rounded,
-                  label: 'На сервере',
-                  count: serverCount,
-                  selected: !showDevice,
-                  onTap: () => onChanged(false),
-                ),
-              ),
+              Icon(Icons.chevron_right_rounded, color: accent),
             ],
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Segment extends StatelessWidget {
-  const _Segment({
-    required this.icon,
-    required this.label,
-    required this.count,
-    required this.selected,
-    required this.onTap,
-  });
-  final IconData icon;
-  final String label;
-  final int count;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // Colour alone should not carry the selected state, so the active half also
-    // shifts to a heavier weight.
-    final color = selected ? scheme.onPrimary : AppColors.muted;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Center(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 17, color: color),
-            const SizedBox(width: 7),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 13.5,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: selected
-                    ? scheme.onPrimary.withValues(alpha: 0.16)
-                    : Colors.white.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                '$count',
-                style: TextStyle(
-                  color: color,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );

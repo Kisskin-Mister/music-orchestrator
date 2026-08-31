@@ -45,7 +45,7 @@ function SourceIcon({ id, className = '', colored = false }: { id: string; class
   if (id.includes('local')) return <Folder className={className} style={style} aria-label="Local" />;
   return <Music2 className={className} style={style} aria-label="Source" />;
 }
-function sourceName(id: string) { if (id.includes('youtube')) return 'YouTube'; if (id.includes('soundcloud')) return 'SoundCloud'; if (id === 'local') return 'Local'; return id; }
+function sourceName(id: string) { if (id.includes('youtube')) return 'YouTube'; if (id.includes('soundcloud')) return 'SoundCloud'; if (id === 'local') return 'Мои файлы'; return id; }
 // Deterministic two-tone gradient per track id, so tracks without artwork get a distinct,
 // intentional-looking cover instead of a flat grey box — the same trick Spotify/SoundCloud use.
 function artHues(seed: string) { let h = 0; for (let i = 0; i < seed.length; i += 1) h = (h * 31 + seed.charCodeAt(i)) >>> 0; return { a: h % 360, b: (h % 360 + 46) % 360 }; }

@@ -6,6 +6,10 @@ import '../api/models.dart';
 
 enum LoadState { idle, loading, loaded, error }
 
+/// Оси медиатеки. Плоский список из тысяч треков — это не медиатека, а свалка;
+/// «Исполнители» и «Альбомы» дают те же треки, но с двух других сторон.
+enum LibraryAxis { tracks, artists, albums }
+
 const _selectedProvidersPrefsKey = 'mo_enabled_search_providers';
 const _favoritesCacheKey = 'mo_cache_favorites';
 const _downloadsCacheKey = 'mo_cache_downloads';
@@ -36,8 +40,8 @@ class LibraryController extends ChangeNotifier {
   static const int searchPageSize = 20;
 
   /// Raw items the server has handed us so far — the offset of the next page.
-  /// Counted before the `local` filter below, otherwise dropping a local track
-  /// would shift every following page by one and lose results.
+  /// Counted before the `local` filter in [search], otherwise dropping a local
+  /// track would shift every following page by one and lose results.
   int _searchFetched = 0;
 
   /// Bumped on every new query so a page that lands late cannot append itself
@@ -52,7 +56,6 @@ class LibraryController extends ChangeNotifier {
   List<Track> get libraryTracks {
     final byId = <String, Track>{};
     for (final track in [...favorites, ...downloads]) {
-      if (track.providerId == 'local') continue;
       final current = byId[track.id];
       if (current == null) {
         byId[track.id] = track;
@@ -85,6 +88,175 @@ class LibraryController extends ChangeNotifier {
     return tracks;
   }
 
+  // --- Медиатека -------------------------------------------------------
+
+  LibraryAxis libraryAxis = LibraryAxis.tracks;
+  String libraryQuery = '';
+  String librarySource = '';
+  List<Track> libraryPage = [];
+  int libraryTotal = 0;
+  Map<String, int> librarySources = {};
+  List<ArtistSummary> artists = [];
+  List<AlbumSummary> albums = [];
+  LoadState libraryState = LoadState.idle;
+  bool libraryLoadingMore = false;
+
+  /// Сервер не ответил, и на экране лежит локальный кэш. Это надо показать:
+  /// иначе неполная медиатека выглядит как потерянная.
+  bool libraryFromCache = false;
+
+  static const int libraryPageSize = 60;
+  int _libraryGeneration = 0;
+
+  bool get canLoadMoreLibrary =>
+      libraryState == LoadState.loaded &&
+      !libraryFromCache &&
+      libraryPage.length < libraryTotal;
+
+  Future<void> setLibraryAxis(LibraryAxis axis) async {
+    if (libraryAxis == axis) return;
+    libraryAxis = axis;
+    notifyListeners();
+    await loadLibrary();
+  }
+
+  Future<void> setLibraryQuery(String query) async {
+    if (libraryQuery == query) return;
+    libraryQuery = query;
+    await loadLibrary();
+  }
+
+  /// Пустая строка — «все источники». Повторный тап по выбранному чипу
+  /// снимает фильтр: иначе из него некуда вернуться.
+  Future<void> setLibrarySource(String source) async {
+    librarySource = librarySource == source ? '' : source;
+    await loadLibrary();
+  }
+
+  Future<void> loadLibrary() async {
+    final generation = ++_libraryGeneration;
+    libraryState = LoadState.loading;
+    libraryLoadingMore = false;
+    notifyListeners();
+    try {
+      switch (libraryAxis) {
+        case LibraryAxis.tracks:
+          final page = await _api.library(
+            query: libraryQuery,
+            source: librarySource,
+            limit: libraryPageSize,
+          );
+          if (generation != _libraryGeneration) return;
+          libraryPage = page.tracks;
+          libraryTotal = page.total;
+          librarySources = page.sources;
+        case LibraryAxis.artists:
+          final result = await _api.libraryArtists(query: libraryQuery);
+          if (generation != _libraryGeneration) return;
+          artists = result;
+        case LibraryAxis.albums:
+          final result = await _api.libraryAlbums(query: libraryQuery);
+          if (generation != _libraryGeneration) return;
+          albums = result;
+      }
+      libraryFromCache = false;
+      libraryState = LoadState.loaded;
+    } catch (_) {
+      if (generation != _libraryGeneration) return;
+      // Сервер недоступен — показываем то, что закэшировано на устройстве,
+      // вместо пустого экрана, который читается как «музыка пропала».
+      _fallBackToCache();
+    }
+    notifyListeners();
+  }
+
+  void _fallBackToCache() {
+    libraryFromCache = true;
+    final needle = libraryQuery.trim().toLowerCase();
+    final cached = libraryTracks.where((track) {
+      if (needle.isEmpty) return true;
+      return track.title.toLowerCase().contains(needle) ||
+          (track.artist ?? '').toLowerCase().contains(needle) ||
+          (track.album ?? '').toLowerCase().contains(needle);
+    }).toList();
+    libraryPage = cached;
+    libraryTotal = cached.length;
+    librarySources = {};
+    // Группировку по кэшу считаем на клиенте: он мал по определению — это
+    // ровно то, что успело поместиться в память телефона.
+    final byArtist = <String, Set<String>>{};
+    final artistTracks = <String, int>{};
+    // Ключ — запись (альбом, исполнитель): у записей в Dart равенство по
+    // значению, поэтому одноимённые альбомы разных артистов не сливаются.
+    final albumTracks = <({String album, String artist}), int>{};
+    for (final track in cached) {
+      final artist = (track.artist ?? '').trim().isEmpty
+          ? 'Неизвестный исполнитель'
+          : track.artist!.trim();
+      final album = (track.album ?? '').trim().isEmpty
+          ? 'Без альбома'
+          : track.album!.trim();
+      artistTracks[artist] = (artistTracks[artist] ?? 0) + 1;
+      (byArtist[artist] ??= {}).add(album);
+      final key = (album: album, artist: artist);
+      albumTracks[key] = (albumTracks[key] ?? 0) + 1;
+    }
+    artists =
+        artistTracks.entries
+            .map(
+              (e) => ArtistSummary(
+                name: e.key,
+                tracks: e.value,
+                albums: byArtist[e.key]?.length ?? 0,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    albums =
+        albumTracks.entries
+            .map(
+              (e) => AlbumSummary(
+                name: e.key.album,
+                artist: e.key.artist,
+                tracks: e.value,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    libraryState = LoadState.loaded;
+  }
+
+  /// Дозагружает следующую страницу треков. Безопасно звать повторно — пока
+  /// страница в пути или всё уже загружено, вызов ничего не делает.
+  Future<void> loadMoreLibrary() async {
+    if (libraryLoadingMore || !canLoadMoreLibrary) return;
+    final generation = _libraryGeneration;
+    libraryLoadingMore = true;
+    notifyListeners();
+    try {
+      final page = await _api.library(
+        query: libraryQuery,
+        source: librarySource,
+        limit: libraryPageSize,
+        offset: libraryPage.length,
+      );
+      if (generation != _libraryGeneration) return;
+      final seen = libraryPage.map((track) => track.id).toSet();
+      libraryPage = [
+        ...libraryPage,
+        ...page.tracks.where((track) => seen.add(track.id)),
+      ];
+      libraryTotal = page.total;
+    } catch (_) {
+      // Оставляем то, что уже на экране; следующий скролл повторит запрос.
+    } finally {
+      if (generation == _libraryGeneration) {
+        libraryLoadingMore = false;
+        notifyListeners();
+      }
+    }
+  }
+
   Future<void> refreshAll() async {
     try {
       providers = (await _api.providers())
@@ -107,6 +279,7 @@ class LibraryController extends ChangeNotifier {
       refreshFavorites(),
       refreshPlaylists(),
       refreshDownloads(),
+      loadLibrary(),
     ]);
     notifyListeners();
   }
@@ -143,9 +316,9 @@ class LibraryController extends ChangeNotifier {
 
   Future<void> refreshFavorites() async {
     try {
-      favorites = (await _api.favorites())
-          .where((track) => track.providerId != 'local')
-          .toList();
+      // Локальные файлы отсюда не выбрасываются: импорт кладёт их именно
+      // сюда, и без них медиатека офлайн выглядит наполовину пустой.
+      favorites = await _api.favorites();
       await _writeCache(_favoritesCacheKey, favorites);
     } catch (_) {
       favorites = await _readCache(_favoritesCacheKey);
@@ -158,7 +331,10 @@ class LibraryController extends ChangeNotifier {
   /// is cached separately by cached_network_image.
   Future<void> _writeCache(String key, List<Track> tracks) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, jsonEncode(tracks.map((t) => t.toJson()).toList()));
+    await prefs.setString(
+      key,
+      jsonEncode(tracks.map((t) => t.toJson()).toList()),
+    );
   }
 
   Future<List<Track>> _readCache(String key) async {
@@ -271,9 +447,7 @@ class LibraryController extends ChangeNotifier {
       limit: searchPageSize,
       offset: 0,
     );
-    return result.items
-        .where((track) => track.providerId != 'local')
-        .toList();
+    return result.items.where((track) => track.providerId != 'local').toList();
   }
 
   Future<void> toggleFavorite(Track track) async {
@@ -315,6 +489,24 @@ class LibraryController extends ChangeNotifier {
     } finally {
       downloadingIds = {...downloadingIds}..remove(track.id);
       notifyListeners();
+    }
+  }
+
+  /// Загружает файлы в медиатеку сервера и обновляет её.
+  Future<ImportResult?> importFiles(
+    List<UploadFile> files, {
+    void Function(int done, int total)? onProgress,
+  }) async {
+    actionError = null;
+    try {
+      final result = await _api.importUpload(files, onProgress: onProgress);
+      await refreshFavorites();
+      await loadLibrary();
+      return result;
+    } catch (e) {
+      actionError = '$e';
+      notifyListeners();
+      return null;
     }
   }
 

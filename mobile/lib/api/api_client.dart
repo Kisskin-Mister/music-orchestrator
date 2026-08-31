@@ -34,7 +34,8 @@ class ApiClient {
   /// True when a session cookie was persisted by an earlier successful login.
   /// Lets the app open offline instead of stranding the user on the login
   /// screen when the server is unreachable but downloads exist on the device.
-  bool get hasStoredSession => _sessionCookie != null && _sessionCookie!.isNotEmpty;
+  bool get hasStoredSession =>
+      _sessionCookie != null && _sessionCookie!.isNotEmpty;
 
   Future<void> loadPersistedSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -99,6 +100,18 @@ class ApiClient {
     Duration timeout = const Duration(seconds: 12),
   }) async {
     final res = await http.get(_uri(path), headers: _headers).timeout(timeout);
+    _throwIfError(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> _getJsonQuery(
+    String path,
+    Map<String, String> query, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    final res = await http
+        .get(_uri(path, query), headers: _headers)
+        .timeout(timeout);
     _throwIfError(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
@@ -332,7 +345,10 @@ class ApiClient {
   /// Asks the server to fetch and transcode the track into APP_MEDIA_ROOT.
   /// Returns the resulting `/media/...` path, which is also what a
   /// save-to-device download reads from (see OfflineController).
-  Future<String?> createDownload(String trackId, {String format = 'mp3'}) async {
+  Future<String?> createDownload(
+    String trackId, {
+    String format = 'mp3',
+  }) async {
     final res = await http
         .post(
           _uri('/v1/downloads'),
@@ -353,14 +369,124 @@ class ApiClient {
 
   /// Streams a server-side media file so it can be written to device storage.
   /// Returns the byte stream plus the total length when the server sends one.
-  Future<({Stream<List<int>> bytes, int? contentLength})> openMedia(String mediaUrl) async {
+  Future<({Stream<List<int>> bytes, int? contentLength})> openMedia(
+    String mediaUrl,
+  ) async {
     final resolved = resolveUrl(mediaUrl)!;
-    final request = http.Request('GET', Uri.parse(resolved))..headers.addAll(_headers);
-    final response = await http.Client().send(request).timeout(const Duration(minutes: 5));
+    final request = http.Request('GET', Uri.parse(resolved))
+      ..headers.addAll(_headers);
+    final response = await http.Client()
+        .send(request)
+        .timeout(const Duration(minutes: 5));
     if (response.statusCode != 200) {
-      throw ApiException('Не удалось получить файл (HTTP ${response.statusCode})', response.statusCode);
+      throw ApiException(
+        'Не удалось получить файл (HTTP ${response.statusCode})',
+        response.statusCode,
+      );
     }
-    return (bytes: response.stream.cast<List<int>>(), contentLength: response.contentLength);
+    return (
+      bytes: response.stream.cast<List<int>>(),
+      contentLength: response.contentLength,
+    );
+  }
+
+  /// Медиатека постранично. Фильтрация, группировка и счётчики считаются в
+  /// SQLite на сервере — клиенту не нужно знать про всю коллекцию, чтобы
+  /// показать её кусок.
+  Future<LibraryPage> library({
+    String query = '',
+    String source = '',
+    int limit = 60,
+    int offset = 0,
+  }) async => LibraryPage.fromJson(
+    await _getJsonQuery('/v1/library', {
+      if (query.isNotEmpty) 'q': query,
+      if (source.isNotEmpty) 'source': source,
+      'limit': '$limit',
+      'offset': '$offset',
+    }),
+  );
+
+  Future<List<ArtistSummary>> libraryArtists({String query = ''}) async {
+    final json = await _getJsonQuery('/v1/library', {
+      'group': 'artists',
+      if (query.isNotEmpty) 'q': query,
+    });
+    return ((json['artists'] as List?) ?? const [])
+        .map((e) => ArtistSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<List<AlbumSummary>> libraryAlbums({String query = ''}) async {
+    final json = await _getJsonQuery('/v1/library', {
+      'group': 'albums',
+      if (query.isNotEmpty) 'q': query,
+    });
+    return ((json['albums'] as List?) ?? const [])
+        .map((e) => AlbumSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Загружает выбранные файлы в медиатеку сервера.
+  ///
+  /// Файлы прикрепляются потоком с диска (`fromPath`), а не читаются в память:
+  /// пользователь вполне может выбрать папку на несколько гигабайт, и телефон
+  /// такую загрузку в оперативке не переживёт. В вебе пути нет — там приходят
+  /// байты, и выбор ограничен тем, что браузер уже держит в памяти.
+  ///
+  /// [onProgress] получает долю от 0 до 1 — по завершённым файлам, а не по
+  /// байтам: http-пакет не отдаёт прогресс тела запроса.
+  Future<ImportResult> importUpload(
+    List<UploadFile> files, {
+    void Function(int done, int total)? onProgress,
+  }) async {
+    var scanned = 0, imported = 0, duplicate = 0;
+    final skipped = <({String path, String reason})>[];
+    // Файлы уходят пачками: один запрос на тысячу файлов рвётся целиком, если
+    // связь моргнула на последнем, а так теряется только текущая пачка.
+    const batchSize = 25;
+    for (var start = 0; start < files.length; start += batchSize) {
+      final batch = files.sublist(
+        start,
+        (start + batchSize).clamp(0, files.length),
+      );
+      final request = http.MultipartRequest('POST', _uri('/v1/import/upload'));
+      request.headers.addAll(_headers);
+      for (final file in batch) {
+        request.files.add(
+          file.path != null
+              ? await http.MultipartFile.fromPath(
+                  'files',
+                  file.path!,
+                  filename: file.name,
+                )
+              : http.MultipartFile.fromBytes(
+                  'files',
+                  file.bytes ?? const [],
+                  filename: file.name,
+                ),
+        );
+      }
+      final streamed = await request.send().timeout(
+        const Duration(minutes: 30),
+      );
+      final res = await http.Response.fromStream(streamed);
+      _throwIfError(res);
+      final part = ImportResult.fromJson(
+        jsonDecode(res.body) as Map<String, dynamic>,
+      );
+      scanned += part.scanned;
+      imported += part.imported;
+      duplicate += part.duplicate;
+      skipped.addAll(part.skipped);
+      onProgress?.call(start + batch.length, files.length);
+    }
+    return ImportResult(
+      scanned: scanned,
+      imported: imported,
+      duplicate: duplicate,
+      skipped: skipped,
+    );
   }
 
   Future<List<Playlist>> playlists() async {

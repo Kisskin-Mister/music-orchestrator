@@ -175,7 +175,7 @@ func (a *App) authMe(w http.ResponseWriter, r *http.Request) {
 func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	_, role, _, _, ok := a.store.AccountByID(userIDFromRequest(r))
 	if !ok || role != "admin" {
-		writeErrorCode(w, http.StatusForbidden, "admin_required", "Admin access required")
+		writeErrorCode(w, http.StatusForbidden, "admin_required", "Нужны права администратора — войди в аккаунт владельца")
 		return false
 	}
 	return true

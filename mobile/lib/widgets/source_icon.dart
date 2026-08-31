@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 String sourceName(String providerId) {
   if (providerId.contains('youtube')) return 'YouTube';
   if (providerId.contains('soundcloud')) return 'SoundCloud';
+  if (providerId == 'local') return 'Мои файлы';
   return providerId;
 }
 
