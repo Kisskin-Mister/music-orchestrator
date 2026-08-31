@@ -116,3 +116,25 @@ func TestLocalFileIsScopedToOwner(t *testing.T) {
 		t.Fatal("alice cannot resolve her own file")
 	}
 }
+
+// The browser sends a relative path as the filename when a whole folder is
+// picked ("Artist/Album/01.mp3"). Joining that onto a directory would let a
+// crafted client write anywhere, so only the base name may survive.
+func TestSafeUploadNameStripsPaths(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"Artist/Album/01.mp3", "01.mp3"},
+		{`Artist\Album\01.mp3`, "01.mp3"},
+		{"song.mp3", "song.mp3"},
+		{"Альбом/трек.mp3", "трек.mp3"},
+	} {
+		got, ok := safeUploadName(c.in)
+		if !ok || got != c.want {
+			t.Errorf("safeUploadName(%q) = %q,%v — want %q", c.in, got, ok, c.want)
+		}
+	}
+	for _, bad := range []string{"../../etc/passwd", "..", ".", "", "   ", "../secret.mp3"} {
+		if got, ok := safeUploadName(bad); ok {
+			t.Errorf("safeUploadName(%q) accepted, resolved to %q", bad, got)
+		}
+	}
+}

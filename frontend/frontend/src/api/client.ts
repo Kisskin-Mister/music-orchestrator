@@ -1,4 +1,4 @@
-import type { APIError, Favorite, Job, Playback, Playlist, Provider, SearchResponse, SessionInfo, User, ServerSettings, ServerSettingsPatch } from './types';
+import type { APIError, Favorite, Job, Playback, Playlist, Provider, SearchResponse, SessionInfo, User, ServerSettings, ServerSettingsPatch, ImportResult } from './types';
 
 const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -72,6 +72,28 @@ export const api = {
   logout:()=>request<void>('/v1/auth/logout',{method:'POST'}),
   updateAccount:(patch:{username:string;password?:string;totp_secret?:string})=>request<SessionInfo>('/v1/account',{method:'PATCH',body:JSON.stringify(patch)},true),
   settings:()=>request<ServerSettings>('/v1/settings',{},true),
+  // Сканирование больших папок идёт минутами, поэтому таймаут отдельный.
+  // XHR, а не fetch: только он сообщает прогресс отдачи. При загрузке папки
+  // на гигабайты полоса — единственный признак, что процесс жив.
+  importUpload:(files:File[], onProgress?:(sent:number,total:number)=>void)=>new Promise<ImportResult>((resolve,reject)=>{
+    const form=new FormData();
+    for(const f of files) form.append('files', f, f.name);
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST', `${getBackendBaseURL()}/v1/import/upload`);
+    xhr.withCredentials=true;
+    if(API_KEY) xhr.setRequestHeader("X-API-Key", API_KEY);
+    xhr.upload.onprogress=(e)=>{ if(e.lengthComputable) onProgress?.(e.loaded, e.total); };
+    xhr.onload=()=>{
+      try{
+        const body=JSON.parse(xhr.responseText||'{}');
+        if(xhr.status>=200&&xhr.status<300) resolve(body as ImportResult);
+        else reject(new Error(body?.error?.message ?? `HTTP ${xhr.status}`));
+      }catch{ reject(new Error(`HTTP ${xhr.status}`)); }
+    };
+    xhr.onerror=()=>reject(new Error('Соединение прервалось'));
+    xhr.send(form);
+  }),
+  importScan:(path:string)=>request<ImportResult>('/v1/import/scan',{method:'POST',body:JSON.stringify({path})},true,30*60*1000),
   updateSettings:(patch:ServerSettingsPatch)=>request<ServerSettings>('/v1/settings',{method:'PATCH',body:JSON.stringify(patch)},true),
   users:()=>request<User[]>('/v1/users',{},true),
   createUser:(username:string,password:string)=>request<User>('/v1/users',{method:'POST',body:JSON.stringify({username,password})},true),

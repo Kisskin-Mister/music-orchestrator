@@ -57,3 +57,14 @@ export type ServerSettingsPatch = Partial<{
   navidrome_username: string;
   navidrome_token: string;
 }>;
+
+/** Итог сканирования папки с музыкой (см. import.go). */
+export type ImportResult = {
+  scanned: number;
+  imported: number;
+  duplicate: number;
+  skipped?: { path: string; reason: string }[];
+  elapsed: string;
+  truncated?: boolean;
+  counts?: Record<string, number>;
+};

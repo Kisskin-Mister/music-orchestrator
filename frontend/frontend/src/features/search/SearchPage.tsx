@@ -1,3 +1,4 @@
+import type React from 'react';
 import { CSSProperties, FormEvent, MouseEvent, ReactNode, TouchEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Cloud, Download, Folder, Heart, Library, ListMusic, Loader2, LogOut, MoreHorizontal, Music2, Pause, Pencil, Play, Plus, Repeat, Repeat1, Search, SearchX, Settings, ShieldCheck, Shuffle, SkipBack, SkipForward, Trash2, X, Youtube } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -7,7 +8,9 @@ import { analytics } from '@/lib/analytics';
 import { artworkURL, getBackendBaseURL, getDefaultBackendBaseURL, setBackendBaseURL } from '@/api/client';
 import { ACCENT_PRESETS, applyAccent, getStoredAccent } from '@/lib/theme';
 import { useSettings, useUpdateSettings } from '@/api/queries';
-import type { Job, Playlist, Provider, ProviderId, ServerSettingsPatch, Track, User } from '@/api/types';
+import { useQueryClient } from '@tanstack/react-query';
+import { api } from '@/api/client';
+import type { Job, Playlist, Provider, ProviderId, ImportResult, ServerSettingsPatch, Track, User } from '@/api/types';
 
 const DEFAULT_PROVIDERS: ProviderId[] = ['youtube_stream', 'soundcloud_stream'];
 const PAGE_SIZE = 20;
@@ -280,7 +283,7 @@ function CoverStrip({ eyebrow, tracks, onPlay }: { eyebrow: string; tracks: Trac
   </section>;
 }
 function LibraryView({ tracks, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { tracks: Track[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { return <><SectionHeader eyebrow="Коллекция" title="Медиатека" subtitle="Всё, что ты лайкнул или скачал, — в одном месте."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в медиатеке" /></SectionHeader>{tracks.length ? <><CoverStrip eyebrow="Слушай снова" tracks={tracks} onPlay={onPlay} /><TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /></> : <EmptyState icon={Heart} title="Пока пусто" hint="Лайкни трек или скачай его — и он появится здесь." />}</>; }
-function DownloadsView({ jobs, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { jobs: Job[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { const tracks = filterTracks(jobs.map((job) => { const track = trackFromJob(job); return track ? { ...track, downloaded: true, download_media_url: getMediaURL(job) ?? track.download_media_url } : null; }).filter(Boolean) as Track[], filter); return <><SectionHeader eyebrow="Offline" title="Загрузки" subtitle="Лежат на сервере — нужен доступ к нему, чтобы слушать."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в загрузках" /></SectionHeader>{tracks.length ? <TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /> : <EmptyState icon={Download} title="На сервере ничего нет" hint="Скачай трек на сервер, чтобы не зависеть от YouTube и SoundCloud." />}</>; }
+function DownloadsView({ jobs, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { jobs: Job[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { const tracks = filterTracks(jobs.map((job) => { const track = trackFromJob(job); return track ? { ...track, downloaded: true, download_media_url: getMediaURL(job) ?? track.download_media_url } : null; }).filter(Boolean) as Track[], filter); return <><SectionHeader eyebrow="Offline" title="Загрузки" subtitle="Лежат на сервере — нужен доступ к нему, чтобы слушать."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в загрузках" /></SectionHeader><ImportSection />{tracks.length ? <TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /> : <EmptyState icon={Download} title="На сервере ничего нет" hint="Скачай трек на сервер, чтобы не зависеть от YouTube и SoundCloud." />}</>; }
 
 function PlaylistsView({ playlists, libraryTracks, favoriteIDs, downloadedByTrack, onLike, onPlay, creating, setCreating }: TrackSurfaceProps & { libraryTracks: Track[]; creating: boolean; setCreating: (v: boolean) => void }) {
   const createPlaylist = useCreatePlaylist();
@@ -928,5 +931,153 @@ function SecretField({ label, isSet, onChange }: { label: string; isSet: boolean
   return <label className="grid gap-2 text-sm text-[#a6abb7]">{label}
     <input type="password" placeholder={isSet ? 'Задан — оставь пустым, чтобы не менять' : 'Не задан'} onChange={(e) => onChange(e.target.value)} className="rounded-xl border border-white/10 bg-surface-2 px-4 py-3 text-white outline-none placeholder:text-[#626875]" />
   </label>;
+}
+
+/** Импорт своей музыки.
+ *
+ *  Одна зона, три способа: перетащить, выбрать файлы, выбрать папку целиком.
+ *  `webkitdirectory` отдаёт всё дерево рекурсивно, поэтому вложенные папки
+ *  работают сами — пользователю не нужно знать про обход каталогов.
+ *
+ *  Отбор по расширению идёт до отправки: тащить на сервер обложки и .txt из
+ *  папки с альбомами значит греть канал впустую. */
+function ImportSection() {
+  // Загрузка требует прав администратора, поэтому остальным блок не
+  // показывается: кнопка, которая всегда отвечает 403, хуже отсутствующей.
+  const session = useSession();
+  const qc = useQueryClient();
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const filesRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+
+  const AUDIO = /\.(mp3|m4a|flac|wav|aac|ogg|opus|wma|aiff|alac|m4p)$/i;
+
+  const send = async (picked: File[]) => {
+    const audio = picked.filter((f) => AUDIO.test(f.name));
+    setError(null);
+    setResult(null);
+    if (!audio.length) {
+      setError('Аудиофайлов не найдено. Поддерживаются mp3, m4a, flac, wav, aac, ogg, opus, wma.');
+      return;
+    }
+    setProgress({ sent: 0, total: 1 });
+    try {
+      const res = await api.importUpload(audio, (sent, total) => setProgress({ sent, total }));
+      setResult(res);
+      qc.invalidateQueries({ queryKey: ['favorites'] });
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось загрузить файлы');
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  // Перетаскивание папки даёт записи-каталоги, а не файлы, поэтому дерево
+  // обходится вручную через File System API.
+  const collectEntry = async (entry: FileSystemEntry, out: File[]): Promise<void> => {
+    if (entry.isFile) {
+      const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
+      out.push(file);
+      return;
+    }
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    for (;;) {
+      const batch = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej));
+      if (!batch.length) return;
+      for (const child of batch) await collectEntry(child, out);
+    }
+  };
+
+  const onDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragging(false);
+    const items = [...event.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean) as FileSystemEntry[];
+    if (items.length) {
+      const collected: File[] = [];
+      for (const entry of items) await collectEntry(entry, collected);
+      await send(collected);
+      return;
+    }
+    await send([...event.dataTransfer.files]);
+  };
+
+  if (session.data?.role !== 'admin') return null;
+  const busy = progress !== null;
+  const percent = progress && progress.total > 0 ? Math.round((progress.sent / progress.total) * 100) : 0;
+
+  return <section className="mb-6">
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={onDrop}
+      className={`rounded-2xl border border-dashed p-6 text-center transition ${dragging ? 'border-lime-300 bg-lime-300/[0.06]' : 'border-white/15 bg-surface'}`}
+    >
+      <span className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-surface-2 text-lime-300"><Download size={22} /></span>
+      <h3 className="m-0 mt-3 text-lg font-semibold">Добавить свою музыку</h3>
+      <p className="m-0 mt-1 text-sm text-pretty text-[#8c919e]">
+        Перетащите сюда файлы или целую папку — вложенные папки разберутся сами.
+      </p>
+
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        <button type="button" disabled={busy} onClick={() => filesRef.current?.click()}
+          className="inline-flex items-center gap-2 rounded-xl bg-lime-300 px-5 py-3 font-medium text-black transition active:scale-[.98] disabled:opacity-50">
+          {busy ? <><Loader2 className="animate-spin" size={17} /> Загружаю…</> : <><Plus size={17} /> Выбрать файлы</>}
+        </button>
+        <button type="button" disabled={busy} onClick={() => folderRef.current?.click()}
+          className="inline-flex items-center gap-2 rounded-xl border border-white/12 px-5 py-3 font-medium text-[#d7dbe4] transition hover:bg-white/8 active:scale-[.98] disabled:opacity-50">
+          <Folder size={17} /> Выбрать папку
+        </button>
+      </div>
+
+      <input ref={filesRef} type="file" multiple accept="audio/*,.mp3,.m4a,.flac,.wav,.aac,.ogg,.opus,.wma,.aiff"
+        className="hidden" onChange={(e) => { send([...(e.target.files ?? [])]); e.target.value = ''; }} />
+      {/* webkitdirectory не типизирован в React, отсюда приведение. */}
+      <input ref={folderRef} type="file" multiple className="hidden"
+        {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+        onChange={(e) => { send([...(e.target.files ?? [])]); e.target.value = ''; }} />
+
+      {busy && <div className="mx-auto mt-5 max-w-md">
+        <div className="h-2 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full bg-lime-300 transition-[width] duration-200" style={{ width: `${percent}%` }} />
+        </div>
+        <p className="m-0 mt-2 text-xs tabular-nums text-[#8c919e]">Отправлено {percent}% — можно не закрывать вкладку</p>
+      </div>}
+    </div>
+
+    {error && <p role="alert" className="m-0 mt-3 rounded-xl border border-red-300/25 bg-red-300/[0.06] px-4 py-3 text-sm text-red-100">{error}</p>}
+
+    {result && <div className="mt-3 rounded-xl border border-white/10 bg-surface p-4">
+      <div className="flex flex-wrap gap-x-8 gap-y-3">
+        <Stat label="Добавлено" value={result.imported} accent />
+        <Stat label="Уже были" value={result.duplicate} />
+        <Stat label="Обработано" value={result.scanned} />
+        <Stat label="Время" text={result.elapsed} />
+      </div>
+      {result.counts && Object.keys(result.counts).length > 0 && <p className="m-0 mt-3 text-xs text-[#8c919e]">
+        Форматы: {Object.entries(result.counts).map(([ext, n]) => `${ext} — ${n}`).join(', ')}
+      </p>}
+      {/* Пропущенные показываются, иначе непонятно, почему часть не появилась. */}
+      {result.skipped && result.skipped.length > 0 && <details className="mt-4 border-t border-white/8 pt-3">
+        <summary className="cursor-pointer select-none text-sm text-[#a6abb7]">Пропущено: {result.skipped.length}</summary>
+        <ul className="m-0 mt-3 grid gap-2 p-0">
+          {result.skipped.slice(0, 40).map((item) => <li key={item.path} className="list-none text-sm">
+            <strong className="block truncate font-normal text-[#d7dbe4]">{item.path}</strong>
+            <span className="text-xs text-[#8c919e]">{item.reason}</span>
+          </li>)}
+        </ul>
+      </details>}
+    </div>}
+  </section>;
+}
+
+function Stat({ label, value, text, accent = false }: { label: string; value?: number; text?: string; accent?: boolean }) {
+  return <div>
+    <div className={`text-2xl font-semibold tabular-nums ${accent ? 'text-lime-300' : ''}`}>{text ?? value}</div>
+    <div className="mt-0.5 text-xs text-[#8c919e]">{label}</div>
+  </div>;
 }
 

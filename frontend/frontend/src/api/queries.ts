@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type { Favorite, Track } from './types';
 
+export const useImportScan=()=>{const qc=useQueryClient();return useMutation({mutationFn:api.importScan,onSuccess:()=>{qc.invalidateQueries({queryKey:['favorites']});qc.invalidateQueries({queryKey:['downloads']});}})};
 export const useSettings=()=>useQuery({queryKey:['settings'],queryFn:api.settings,retry:false});
 export const useUpdateSettings=()=>{const qc=useQueryClient();return useMutation({mutationFn:api.updateSettings,onSuccess:(next)=>{qc.setQueryData(['settings'],next);qc.invalidateQueries({queryKey:['providers']});}})};
 export const useSession=()=>useQuery({queryKey:['session'],queryFn:api.session,staleTime:60_000,retry:false});

@@ -275,3 +275,160 @@ func (a *App) serveLocalFile(w http.ResponseWriter, r *http.Request) {
 	}
 	http.ServeFile(w, r, safe)
 }
+
+// --- Загрузка файлов из браузера ----------------------------------------
+
+// maxUploadFileSize bounds a single file. A lossless album track runs to tens of
+// megabytes; anything past this is not music someone meant to upload.
+const maxUploadFileSize = 512 << 20
+
+// safeUploadName strips everything except the base name.
+//
+// The filename arrives from the browser, and with `webkitdirectory` it carries
+// the relative path ("Artist/Album/01.mp3"). Joining that onto a directory would
+// let a crafted client write outside it, so only the final component survives
+// and anything still suspicious is rejected.
+func safeUploadName(name string) (string, bool) {
+	base := filepath.Base(filepath.FromSlash(name))
+	if base == "." || base == ".." || base == string(os.PathSeparator) || strings.TrimSpace(base) == "" {
+		return "", false
+	}
+	if strings.ContainsAny(base, `/\`) || strings.Contains(base, "..") {
+		return "", false
+	}
+	return base, true
+}
+
+// uploadDir is where browser uploads land: inside the media root the server
+// already owns, so no extra configuration is needed for the common case.
+func (a *App) uploadDir() string { return filepath.Join(a.cfg.MediaRoot, "imported") }
+
+// importUpload accepts files or a whole folder from the browser.
+//
+// It reads the multipart body as a stream rather than through ParseMultipartForm:
+// a dropped folder can be gigabytes, and buffering that in memory would take the
+// server down on the small machines this project targets.
+func (a *App) importUpload(w http.ResponseWriter, r *http.Request) {
+	if !a.requireAdmin(w, r) {
+		return
+	}
+	reader, err := r.MultipartReader()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Ожидалась multipart-загрузка")
+		return
+	}
+	if err := os.MkdirAll(a.uploadDir(), 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, "Не удалось создать папку для загрузок")
+		return
+	}
+
+	result := ImportResult{Counts: map[string]int{}}
+	files := []LocalFile{}
+	start := time.Now()
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "Загрузка прервалась: "+err.Error())
+			return
+		}
+		if part.FormName() != "files" || part.FileName() == "" {
+			_ = part.Close()
+			continue
+		}
+		original := part.FileName()
+		name, ok := safeUploadName(original)
+		if !ok {
+			result.Skipped = append(result.Skipped, ImportSkip{Path: original, Reason: "недопустимое имя файла"})
+			_ = part.Close()
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(name))
+		if ext == drmExtension {
+			result.Skipped = append(result.Skipped, ImportSkip{
+				Path:   name,
+				Reason: "Файл защищён DRM (FairPlay). Перекачайте трек из Apple Music — с 2009 года покупки идут без защиты.",
+			})
+			_ = part.Close()
+			continue
+		}
+		if !importableExtensions[ext] {
+			_ = part.Close()
+			continue // не аудио — молча пропускаем, их в папке бывает много
+		}
+
+		stored, size, err := a.storeUpload(part, name)
+		_ = part.Close()
+		if err != nil {
+			result.Skipped = append(result.Skipped, ImportSkip{Path: name, Reason: err.Error()})
+			continue
+		}
+		result.Scanned++
+		result.Counts[strings.TrimPrefix(ext, ".")]++
+
+		fingerprint, err := fileFingerprint(stored, size)
+		if err != nil {
+			result.Skipped = append(result.Skipped, ImportSkip{Path: name, Reason: "не удалось прочитать файл"})
+			continue
+		}
+		title, artist, album, duration := probeTags(r.Context(), stored)
+		if title == "" {
+			title = strings.TrimSuffix(name, filepath.Ext(name))
+		}
+		files = append(files, LocalFile{
+			TrackID: "local:" + fingerprint, Path: stored, Size: size,
+			Track: Track{
+				ID: "local:" + fingerprint, ProviderID: "local", ProviderTrackID: fingerprint,
+				Title: title, Artist: artist, Album: album, DurationSeconds: duration,
+				SourceURL: "/v1/local/" + fingerprint, Attribution: "Загружено",
+				Capabilities: localCaps(), Policy: localPolicy(),
+			},
+		})
+	}
+
+	imported, duplicate, err := a.store.BulkImportLocalFiles(userIDFromRequest(r), files)
+	if err != nil {
+		slog.Warn("upload import failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "Не удалось сохранить загруженные треки")
+		return
+	}
+	result.Imported, result.Duplicate = imported, duplicate
+	result.Elapsed = time.Since(start).Round(time.Millisecond).String()
+	slog.Info("upload finished", "scanned", result.Scanned, "imported", imported, "duplicate", duplicate)
+	writeJSON(w, http.StatusOK, result)
+}
+
+// storeUpload streams one part to disk, refusing anything over the size cap
+// without having buffered it first.
+func (a *App) storeUpload(part io.Reader, name string) (path string, size int64, err error) {
+	path = filepath.Join(a.uploadDir(), name)
+	// A repeat upload of the same name gets a suffix rather than overwriting
+	// someone's existing file; duplicates are caught later by fingerprint.
+	for i := 1; fileExists(path); i++ {
+		ext := filepath.Ext(name)
+		path = filepath.Join(a.uploadDir(), fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(name, ext), i, ext))
+	}
+	dst, err := os.Create(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("не удалось сохранить файл")
+	}
+	defer dst.Close()
+	size, err = io.Copy(dst, io.LimitReader(part, maxUploadFileSize+1))
+	if err != nil {
+		_ = os.Remove(path)
+		return "", 0, fmt.Errorf("ошибка чтения")
+	}
+	if size > maxUploadFileSize {
+		_ = os.Remove(path)
+		return "", 0, fmt.Errorf("файл больше %d МБ", maxUploadFileSize>>20)
+	}
+	return path, size, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}

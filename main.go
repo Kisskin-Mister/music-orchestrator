@@ -66,6 +66,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /v1/auth/me", a.auth(a.authMe))
 	a.mux.HandleFunc("PATCH /v1/account", a.auth(a.updateAccount))
 	a.mux.HandleFunc("POST /v1/import/scan", a.auth(a.importScan))
+	a.mux.HandleFunc("POST /v1/import/upload", a.auth(a.importUpload))
 	a.mux.HandleFunc("GET /v1/local/{fingerprint}", a.serveLocalFile)
 	a.mux.HandleFunc("GET /v1/settings", a.auth(a.getSettings))
 	a.mux.HandleFunc("PATCH /v1/settings", a.auth(a.updateSettings))
