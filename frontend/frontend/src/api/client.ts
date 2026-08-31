@@ -1,4 +1,4 @@
-import type { APIError, Favorite, Job, Playback, Playlist, Provider, SearchResponse, SessionInfo, User, ServerSettings, ServerSettingsPatch, ImportResult } from './types';
+import type { APIError, Favorite, Job, Playback, Playlist, Provider, SearchResponse, SessionInfo, User, ServerSettings, ServerSettingsPatch, ImportResult, LibraryPage, ArtistSummary, AlbumSummary } from './types';
 
 const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 const API_KEY = import.meta.env.VITE_API_KEY ?? '';
@@ -71,6 +71,16 @@ export const api = {
   verify:(code:string)=>request<SessionInfo>('/v1/auth/verify',{method:'POST',body:JSON.stringify({code})}),
   logout:()=>request<void>('/v1/auth/logout',{method:'POST'}),
   updateAccount:(patch:{username:string;password?:string;totp_secret?:string})=>request<SessionInfo>('/v1/account',{method:'PATCH',body:JSON.stringify(patch)},true),
+  library:(params:{q?:string;source?:string;limit?:number;offset?:number})=>{
+    const p=new URLSearchParams();
+    if(params.q) p.set('q',params.q);
+    if(params.source) p.set('source',params.source);
+    p.set('limit',String(params.limit ?? 60));
+    p.set('offset',String(params.offset ?? 0));
+    return request<LibraryPage>(`/v1/library?${p}`,{},true);
+  },
+  libraryArtists:(q='')=>request<{artists:ArtistSummary[]}>(`/v1/library?group=artists&q=${encodeURIComponent(q)}`,{},true),
+  libraryAlbums:(q='')=>request<{albums:AlbumSummary[]}>(`/v1/library?group=albums&q=${encodeURIComponent(q)}`,{},true),
   settings:()=>request<ServerSettings>('/v1/settings',{},true),
   // Сканирование больших папок идёт минутами, поэтому таймаут отдельный.
   // XHR, а не fetch: только он сообщает прогресс отдачи. При загрузке папки

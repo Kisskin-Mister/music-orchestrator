@@ -1024,3 +1024,134 @@ func (p Playlist) withAggregates() Playlist {
 	}
 	return p
 }
+
+// --- Медиатека ---------------------------------------------------------
+
+// LibraryPage is one screen of the library, plus what the client needs to
+// render facets without a second round trip.
+type LibraryPage struct {
+	Tracks  []Track        `json:"tracks"`
+	Total   int            `json:"total"`
+	Offset  int            `json:"offset"`
+	Sources map[string]int `json:"sources"`
+}
+
+// ArtistSummary and AlbumSummary drive the "Исполнители"/"Альбомы" axes.
+// Grouping happens in SQL: pulling every row to count them in Go is exactly
+// what stops working at ten thousand tracks.
+type ArtistSummary struct {
+	Name   string `json:"name"`
+	Tracks int    `json:"tracks"`
+	Albums int    `json:"albums"`
+}
+
+type AlbumSummary struct {
+	Name   string `json:"name"`
+	Artist string `json:"artist"`
+	Tracks int    `json:"tracks"`
+	Cover  string `json:"cover,omitempty"`
+}
+
+// libraryFilter builds the shared WHERE clause. Values are always bound as
+// parameters; only the fixed fragments are concatenated.
+func libraryFilter(ownerID, query, source string) (string, []any) {
+	where := ownerFilter("f.owner_id")
+	args := []any{ownerID, ownerID}
+	if strings.TrimSpace(query) != "" {
+		where += ` AND f.track_id IN (SELECT track_id FROM tracks_fts WHERE tracks_fts MATCH ?)`
+		args = append(args, ftsQuery(query))
+	}
+	if source != "" {
+		where += ` AND json_extract(f.track_json,'$.provider_id') = ?`
+		args = append(args, source)
+	}
+	return where, args
+}
+
+func (s *Store) LibraryTracks(ownerID, query, source string, limit, offset int) LibraryPage {
+	if limit <= 0 || limit > 200 {
+		limit = 60
+	}
+	page := LibraryPage{Tracks: []Track{}, Offset: offset, Sources: map[string]int{}}
+	where, args := libraryFilter(ownerID, query, source)
+
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM favorites f WHERE `+where, args...).Scan(&page.Total)
+
+	// Facet counts ignore the source filter, otherwise selecting one source
+	// would zero out every other chip and you could not switch away from it.
+	facetWhere, facetArgs := libraryFilter(ownerID, query, "")
+	if rows, err := s.db.Query(`SELECT json_extract(f.track_json,'$.provider_id') AS src, COUNT(*)
+		FROM favorites f WHERE `+facetWhere+` GROUP BY src`, facetArgs...); err == nil {
+		for rows.Next() {
+			var src sql.NullString
+			var n int
+			if rows.Scan(&src, &n) == nil && src.Valid {
+				page.Sources[src.String] = n
+			}
+		}
+		rows.Close()
+	}
+
+	rows, err := s.db.Query(`SELECT f.track_json FROM favorites f WHERE `+where+
+		` ORDER BY f.created_at DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return page
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var blob string
+		if rows.Scan(&blob) != nil {
+			continue
+		}
+		var t Track
+		if json.Unmarshal([]byte(blob), &t) == nil {
+			page.Tracks = append(page.Tracks, t)
+		}
+	}
+	return page
+}
+
+func (s *Store) LibraryArtists(ownerID, query string) []ArtistSummary {
+	where, args := libraryFilter(ownerID, query, "")
+	rows, err := s.db.Query(`
+		SELECT COALESCE(NULLIF(json_extract(f.track_json,'$.artist'),''),'Без исполнителя') AS artist,
+		       COUNT(*) AS tracks,
+		       COUNT(DISTINCT NULLIF(json_extract(f.track_json,'$.album'),'')) AS albums
+		FROM favorites f WHERE `+where+`
+		GROUP BY artist ORDER BY tracks DESC, artist`, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []ArtistSummary{}
+	for rows.Next() {
+		var a ArtistSummary
+		if rows.Scan(&a.Name, &a.Tracks, &a.Albums) == nil {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (s *Store) LibraryAlbums(ownerID, query string) []AlbumSummary {
+	where, args := libraryFilter(ownerID, query, "")
+	rows, err := s.db.Query(`
+		SELECT COALESCE(NULLIF(json_extract(f.track_json,'$.album'),''),'Без альбома') AS album,
+		       COALESCE(NULLIF(json_extract(f.track_json,'$.artist'),''),'Без исполнителя') AS artist,
+		       COUNT(*) AS tracks,
+		       COALESCE(MAX(json_extract(f.track_json,'$.artwork_url')),'') AS cover
+		FROM favorites f WHERE `+where+`
+		GROUP BY album, artist ORDER BY tracks DESC, album`, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []AlbumSummary{}
+	for rows.Next() {
+		var a AlbumSummary
+		if rows.Scan(&a.Name, &a.Artist, &a.Tracks, &a.Cover) == nil {
+			out = append(out, a)
+		}
+	}
+	return out
+}

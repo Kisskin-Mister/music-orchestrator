@@ -7,7 +7,7 @@ import { OVERREPORTED_DURATION_RATIO, usePlayerStore } from '@/store/player';
 import { analytics } from '@/lib/analytics';
 import { artworkURL, getBackendBaseURL, getDefaultBackendBaseURL, setBackendBaseURL } from '@/api/client';
 import { ACCENT_PRESETS, applyAccent, getStoredAccent } from '@/lib/theme';
-import { useSettings, useUpdateSettings } from '@/api/queries';
+import { useLibrary, useLibraryAlbums, useLibraryArtists, useSettings, useUpdateSettings } from '@/api/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { Job, Playlist, Provider, ProviderId, ImportResult, ServerSettingsPatch, Track, User } from '@/api/types';
@@ -138,7 +138,7 @@ export function SearchPage({ onLogout, localMode = false, onLeaveLocalMode }: { 
       <nav className="grid grid-cols-5 gap-1 lg:grid-cols-1 lg:gap-1">{NAV.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setActiveView(id)} className={`flex flex-col items-center justify-center gap-1 rounded-control px-2 py-2 transition active:scale-[.96] lg:py-3 xl:flex-row xl:justify-start xl:gap-3 xl:px-3 xl:py-2.5 ${activeView === id ? 'bg-lime-300 text-black' : 'text-[#9aa0ad] hover:bg-white/8 hover:text-white'}`} aria-label={label} aria-current={activeView === id ? 'page' : undefined} title={label}><Icon size={20} className="shrink-0" /><span className="text-[11px] leading-none lg:hidden xl:inline xl:text-sm xl:font-medium xl:leading-none">{label}</span></button>)}</nav>
     </aside>
     <section className="min-w-0"><div key={activeView} className="view-enter">
-      {activeView === 'library' && <LibraryView tracks={filteredLibrary} filter={libraryFilter} setFilter={setLibraryFilter} {...shared} />}
+      {activeView === 'library' && <LibraryView {...shared} />}
       {activeView === 'search' && <SearchView draft={draft} setDraft={setDraft} submit={submit} clearSearch={clearSearch} query={query} resultQuery={result.data?.query ?? ''} providers={providers.data ?? []} selectedProviders={selectedProviders} toggleProvider={toggleProvider} isLoading={result.isLoading} isFetching={result.isFetching} isError={result.isError} total={result.data?.total ?? 0} limit={searchLimit} more={loadMore} tracks={result.data?.items ?? []} {...shared} />}
       {activeView === 'playlists' && <PlaylistsView libraryTracks={libraryTracks} creating={creatingPlaylist} setCreating={setCreatingPlaylist} {...shared} />}
       {activeView === 'downloads' && <DownloadsView jobs={downloadedJobs.filter((j) => j.track_id)} filter={downloadsFilter} setFilter={setDownloadsFilter} {...shared} />}
@@ -282,7 +282,129 @@ function CoverStrip({ eyebrow, tracks, onPlay }: { eyebrow: string; tracks: Trac
     </div>
   </section>;
 }
-function LibraryView({ tracks, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { tracks: Track[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { return <><SectionHeader eyebrow="Коллекция" title="Медиатека" subtitle="Всё, что ты лайкнул или скачал, — в одном месте."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в медиатеке" /></SectionHeader>{tracks.length ? <><CoverStrip eyebrow="Слушай снова" tracks={tracks} onPlay={onPlay} /><TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /></> : <EmptyState icon={Heart} title="Пока пусто" hint="Лайкни трек или скачай его — и он появится здесь." />}</>; }
+/** Медиатека.
+ *
+ *  Плоский список перестаёт работать на тысячах треков, поэтому здесь три оси
+ *  — треки, исполнители, альбомы — как в Navidrome и Plex. Группировка и поиск
+ *  считаются в SQLite: тянуть всю библиотеку в браузер, чтобы посчитать её в
+ *  памяти, и есть то, что ломается на десяти тысячах.
+ *
+ *  Страницы по 60: ответ ограничен независимо от размера коллекции. */
+function LibraryView({ playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: TrackSurfaceProps) {
+  const [axis, setAxis] = useState<'tracks' | 'artists' | 'albums'>('tracks');
+  const [draft, setDraft] = useState('');
+  const [query, setQuery] = useState('');
+  const [source, setSource] = useState('');
+  const [offset, setOffset] = useState(0);
+
+  // Поиск ждёт паузы в наборе: запрос на каждую букву — это лишняя нагрузка
+  // на сервер и мигающий список.
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setQuery(draft.trim()); setOffset(0); }, 300);
+    return () => window.clearTimeout(timer);
+  }, [draft]);
+
+  const page = useLibrary(query, source, offset);
+  const artists = useLibraryArtists(query, axis === 'artists');
+  const albums = useLibraryAlbums(query, axis === 'albums');
+
+  const total = page.data?.total ?? 0;
+  const sources = page.data?.sources ?? {};
+  const tracks = page.data?.tracks ?? [];
+  const shown = offset + tracks.length;
+
+  const openArtist = (name: string) => { setDraft(name); setAxis('tracks'); };
+
+  return <>
+    <SectionHeader eyebrow="Коллекция" title="Медиатека"
+      subtitle="Всё, что вы лайкнули, скачали или загрузили, — в одном месте.">
+      <InlineFilter value={draft} onChange={setDraft} placeholder="Искать по названию, исполнителю или альбому" />
+    </SectionHeader>
+
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      {([['tracks', 'Треки'], ['artists', 'Исполнители'], ['albums', 'Альбомы']] as const).map(([id, label]) =>
+        <button key={id} type="button" onClick={() => setAxis(id)} aria-pressed={axis === id}
+          className={`rounded-xl px-4 py-2 text-sm font-medium transition ${axis === id ? 'bg-lime-300 text-black' : 'bg-surface-2 text-[#a6abb7] hover:bg-white/8'}`}>
+          {label}
+        </button>)}
+
+      {/* Фасеты источников только на оси треков: у исполнителя треки бывают
+          из разных мест, и фильтр там сбивал бы счётчики. */}
+      {axis === 'tracks' && Object.keys(sources).length > 1 && <div className="ml-auto flex flex-wrap gap-2">
+        <SourceChip active={source === ''} onClick={() => { setSource(''); setOffset(0); }} label="Все" count={total} />
+        {Object.entries(sources).map(([id, n]) =>
+          <SourceChip key={id} active={source === id} onClick={() => { setSource(id); setOffset(0); }}
+            label={sourceName(id)} count={n} icon={<SourceIcon id={id} colored className="h-4 w-4" />} />)}
+      </div>}
+    </div>
+
+    {axis === 'tracks' && <>
+      {page.isLoading ? <SpinnerLine label="Загружаю медиатеку…" />
+        : tracks.length ? <>
+          {!query && offset === 0 && <CoverStrip eyebrow="Слушай снова" tracks={tracks} onPlay={onPlay} />}
+          <TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs}
+            downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} />
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="m-0 text-xs tabular-nums text-[#8c919e]">Показано {shown} из {total}</p>
+            <div className="flex gap-2">
+              {offset > 0 && <button type="button" onClick={() => setOffset(Math.max(0, offset - 60))}
+                className="rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/8">Назад</button>}
+              {shown < total && <button type="button" onClick={() => setOffset(offset + 60)}
+                className="rounded-xl border border-white/10 bg-surface-2 px-4 py-2 text-sm hover:bg-white/8">Дальше</button>}
+            </div>
+          </div>
+        </>
+        : <EmptyState icon={Heart} title={query ? `По запросу «${query}» ничего нет` : 'Пока пусто'}
+            hint={query ? 'Попробуйте другие слова.' : 'Лайкните трек, скачайте его или загрузите свою музыку на вкладке «Загрузки».'} />}
+    </>}
+
+    {axis === 'artists' && (artists.isLoading ? <SpinnerLine label="Считаю исполнителей…" />
+      : <GroupGrid items={(artists.data?.artists ?? []).map((a) => ({
+          key: a.name, title: a.name,
+          subtitle: `${a.tracks} ${plural(a.tracks, 'трек', 'трека', 'треков')}${a.albums ? ` · ${a.albums} ${plural(a.albums, 'альбом', 'альбома', 'альбомов')}` : ''}`,
+        }))} onOpen={openArtist} empty="Исполнители появятся, когда в медиатеке будут треки" />)}
+
+    {axis === 'albums' && (albums.isLoading ? <SpinnerLine label="Считаю альбомы…" />
+      : <GroupGrid items={(albums.data?.albums ?? []).map((a) => ({
+          key: `${a.artist}/${a.name}`, title: a.name, subtitle: `${a.artist} · ${a.tracks} ${plural(a.tracks, 'трек', 'трека', 'треков')}`,
+          cover: a.cover,
+        }))} onOpen={(_, item) => openArtist(item.title)} empty="Альбомы появятся, когда в медиатеке будут треки" />)}
+  </>;
+}
+
+/** Русские числительные: «1 трек», «2 трека», «5 треков». */
+function plural(n: number, one: string, few: string, many: string) {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return many;
+  const mod10 = n % 10;
+  if (mod10 === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4) return few;
+  return many;
+}
+
+function SourceChip({ active, onClick, label, count, icon }: { active: boolean; onClick: () => void; label: string; count: number; icon?: ReactNode }) {
+  return <button type="button" onClick={onClick} aria-pressed={active}
+    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${active ? 'bg-lime-300 text-black' : 'bg-surface-2 text-[#a6abb7] hover:bg-white/8'}`}>
+    {icon}{label}<span className="tabular-nums opacity-70">{count}</span>
+  </button>;
+}
+
+type GroupItem = { key: string; title: string; subtitle: string; cover?: string };
+
+function GroupGrid({ items, onOpen, empty }: { items: GroupItem[]; onOpen: (key: string, item: GroupItem) => void; empty: string }) {
+  if (!items.length) return <EmptyState icon={Library} title="Пока пусто" hint={empty} />;
+  return <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+    {items.map((item) => <button key={item.key} type="button" onClick={() => onOpen(item.key, item)}
+      className="group rounded-2xl border border-white/8 bg-surface p-3 text-left transition hover:bg-white/[0.05] active:scale-[.99]">
+      <span className="mb-3 grid aspect-square place-items-center overflow-hidden rounded-xl bg-surface-2 text-[#4a505c]">
+        {item.cover ? <img alt="" src={item.cover} className="h-full w-full object-cover" /> : <Music2 size={28} />}
+      </span>
+      <strong className="block truncate text-sm">{item.title}</strong>
+      <span className="mt-0.5 block truncate text-xs text-[#8c919e]">{item.subtitle}</span>
+    </button>)}
+  </div>;
+}
+
 function DownloadsView({ jobs, filter, setFilter, playlists, favoriteIDs, downloadedByTrack, onLike, onPlay }: { jobs: Job[]; filter:string; setFilter:(value:string)=>void } & TrackSurfaceProps) { const tracks = filterTracks(jobs.map((job) => { const track = trackFromJob(job); return track ? { ...track, downloaded: true, download_media_url: getMediaURL(job) ?? track.download_media_url } : null; }).filter(Boolean) as Track[], filter); return <><SectionHeader eyebrow="Offline" title="Загрузки" subtitle="Лежат на сервере — нужен доступ к нему, чтобы слушать."><InlineFilter value={filter} onChange={setFilter} placeholder="Искать в загрузках" /></SectionHeader><ImportSection />{tracks.length ? <TrackList tracks={tracks} playlists={playlists} favoriteIDs={favoriteIDs} downloadedByTrack={downloadedByTrack} onLike={onLike} onPlay={onPlay} /> : <EmptyState icon={Download} title="На сервере ничего нет" hint="Скачай трек на сервер, чтобы не зависеть от YouTube и SoundCloud." />}</>; }
 
 function PlaylistsView({ playlists, libraryTracks, favoriteIDs, downloadedByTrack, onLike, onPlay, creating, setCreating }: TrackSurfaceProps & { libraryTracks: Track[]; creating: boolean; setCreating: (v: boolean) => void }) {

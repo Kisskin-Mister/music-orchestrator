@@ -65,6 +65,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /v1/auth/logout", a.authLogout)
 	a.mux.HandleFunc("GET /v1/auth/me", a.auth(a.authMe))
 	a.mux.HandleFunc("PATCH /v1/account", a.auth(a.updateAccount))
+	a.mux.HandleFunc("GET /v1/library", a.auth(a.library))
 	a.mux.HandleFunc("POST /v1/import/scan", a.auth(a.importScan))
 	a.mux.HandleFunc("POST /v1/import/upload", a.auth(a.importUpload))
 	a.mux.HandleFunc("GET /v1/local/{fingerprint}", a.serveLocalFile)
@@ -1290,5 +1291,32 @@ func main() {
 	slog.Info("music orchestrator listening", "addr", cfg.Addr, "risky_extractors", cfg.EnableRiskyExtractors)
 	if err := http.ListenAndServe(cfg.Addr, app); err != nil && err != http.ErrServerClosed {
 		panic(fmt.Errorf("listen: %w", err))
+	}
+}
+
+// library serves the media library: paged tracks, or the artist/album axes.
+// Grouping and search run in SQLite so the response size stays bounded no
+// matter how large the collection grows.
+func (a *App) library(w http.ResponseWriter, r *http.Request) {
+	ownerID := userIDFromRequest(r)
+	q := r.URL.Query()
+	query, source := q.Get("q"), q.Get("source")
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	switch q.Get("group") {
+	case "artists":
+		writeJSON(w, http.StatusOK, map[string]any{"artists": a.store.LibraryArtists(ownerID, query)})
+	case "albums":
+		writeJSON(w, http.StatusOK, map[string]any{"albums": a.store.LibraryAlbums(ownerID, query)})
+	default:
+		page := a.store.LibraryTracks(ownerID, query, source, limit, offset)
+		for i := range page.Tracks {
+			page.Tracks[i] = a.annotateTrack(ownerID, page.Tracks[i])
+		}
+		writeJSON(w, http.StatusOK, page)
 	}
 }

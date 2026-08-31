@@ -3,6 +3,9 @@ import { api } from './client';
 import type { Favorite, Track } from './types';
 
 export const useImportScan=()=>{const qc=useQueryClient();return useMutation({mutationFn:api.importScan,onSuccess:()=>{qc.invalidateQueries({queryKey:['favorites']});qc.invalidateQueries({queryKey:['downloads']});}})};
+export const useLibrary=(q:string,source:string,offset:number)=>useQuery({queryKey:['library',q,source,offset],queryFn:()=>api.library({q,source,offset}),placeholderData:(prev)=>prev});
+export const useLibraryArtists=(q:string,enabled:boolean)=>useQuery({queryKey:['library-artists',q],queryFn:()=>api.libraryArtists(q),enabled});
+export const useLibraryAlbums=(q:string,enabled:boolean)=>useQuery({queryKey:['library-albums',q],queryFn:()=>api.libraryAlbums(q),enabled});
 export const useSettings=()=>useQuery({queryKey:['settings'],queryFn:api.settings,retry:false});
 export const useUpdateSettings=()=>{const qc=useQueryClient();return useMutation({mutationFn:api.updateSettings,onSuccess:(next)=>{qc.setQueryData(['settings'],next);qc.invalidateQueries({queryKey:['providers']});}})};
 export const useSession=()=>useQuery({queryKey:['session'],queryFn:api.session,staleTime:60_000,retry:false});

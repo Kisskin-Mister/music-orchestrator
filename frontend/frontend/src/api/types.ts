@@ -68,3 +68,13 @@ export type ImportResult = {
   truncated?: boolean;
   counts?: Record<string, number>;
 };
+
+/** Страница медиатеки: треки плюс счётчики для фасетов (см. library в main.go). */
+export type LibraryPage = {
+  tracks: Track[];
+  total: number;
+  offset: number;
+  sources: Record<string, number>;
+};
+export type ArtistSummary = { name: string; tracks: number; albums: number };
+export type AlbumSummary = { name: string; artist: string; tracks: number; cover?: string };
