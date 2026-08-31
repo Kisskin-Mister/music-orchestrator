@@ -108,6 +108,16 @@ CREATE INDEX IF NOT EXISTS idx_jobs_owner ON jobs(owner_id, created_at DESC);
 -- library screen asks "which of these already exist on the server?".
 CREATE INDEX IF NOT EXISTS idx_jobs_download ON jobs(owner_id, type, status, track_id, updated_at DESC);
 
+-- Каталог импортированных файлов. Сами файлы остаются на месте: копировать
+-- десятки гигабайт ради раздачи невыгодно, особенно на Raspberry Pi.
+CREATE TABLE IF NOT EXISTS local_files (
+  track_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  path     TEXT NOT NULL,
+  size     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (track_id, owner_id)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   id            INTEGER PRIMARY KEY CHECK (id = 1),
   settings_json TEXT NOT NULL
@@ -508,6 +518,79 @@ func ftsQuery(input string) string {
 		}
 	}
 	return strings.Join(terms, " ")
+}
+
+// LocalFile pairs an on-disk file with the track it produced.
+type LocalFile struct {
+	TrackID string
+	Path    string
+	Size    int64
+	Track   Track
+}
+
+// BulkImportLocalFiles writes a whole scan in one transaction.
+//
+// The per-call AddFavorite path commits individually, which costs a disk sync
+// per track; batching thousands of inserts into a single commit is what keeps a
+// large import to seconds. Tracks already catalogued are reported as duplicates
+// rather than inserted twice — the fingerprint is the identity.
+func (s *Store) BulkImportLocalFiles(ownerID string, files []LocalFile) (imported, duplicate int, err error) {
+	if len(files) == 0 {
+		return 0, 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().UTC()
+	seen := map[string]bool{}
+	for _, f := range files {
+		// A scan can surface the same file twice (hard links, a folder nested
+		// inside itself via symlink); count it once.
+		if seen[f.TrackID] {
+			duplicate++
+			continue
+		}
+		seen[f.TrackID] = true
+
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM local_files WHERE track_id=? AND owner_id=?`,
+			f.TrackID, ownerID).Scan(&exists); err != nil {
+			return imported, duplicate, err
+		}
+		if exists > 0 {
+			duplicate++
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO local_files (track_id,owner_id,path,size) VALUES (?,?,?,?)`,
+			f.TrackID, ownerID, f.Path, f.Size); err != nil {
+			return imported, duplicate, err
+		}
+		if err := insertFavoriteTx(tx, ownerID, f.Track, now); err != nil {
+			return imported, duplicate, err
+		}
+		imported++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	return imported, duplicate, nil
+}
+
+// LocalFilePath returns where an imported track lives on disk, scoped to the
+// caller so one account cannot read another's files.
+func (s *Store) LocalFilePath(ownerID, trackID string) (string, bool) {
+	var path string
+	err := s.db.QueryRow(`SELECT path FROM local_files WHERE track_id=? AND `+ownerFilter("owner_id"),
+		trackID, ownerID, ownerID).Scan(&path)
+	if err != nil {
+		return "", false
+	}
+	return path, true
 }
 
 // --- Playlists ---------------------------------------------------------
