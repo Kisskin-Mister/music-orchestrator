@@ -19,7 +19,11 @@ func NewProviderService(cfg Config) *ProviderService {
 }
 
 func (p *ProviderService) Providers() []Provider {
-	return []Provider{youtubeOfficialProvider(), soundcloudOfficialProvider(), p.extractorProvider("youtube_stream", "YouTube Stream", "youtube"), p.extractorProvider("soundcloud_stream", "SoundCloud Stream", "soundcloud")}
+	// «local» обязан быть в списке: без него byID не находит провайдера, и
+	// /v1/playback для любого импортированного файла отвечает 404 «Provider not
+	// found». Искать по нему нечего — локальные треки находятся через медиатеку,
+	// поэтому Search у него выключен, и в фильтры поиска он не попадает.
+	return []Provider{localProvider(), youtubeOfficialProvider(), soundcloudOfficialProvider(), p.extractorProvider("youtube_stream", "YouTube Stream", "youtube"), p.extractorProvider("soundcloud_stream", "SoundCloud Stream", "soundcloud")}
 }
 func (p *ProviderService) byID(id string) (Provider, bool) {
 	for _, pr := range p.Providers() {
@@ -30,13 +34,13 @@ func (p *ProviderService) byID(id string) (Provider, bool) {
 	return Provider{}, false
 }
 func localCaps() Capabilities {
-	return Capabilities{Search: true, Metadata: true, RawAudioStream: true, PersistentCache: true, OfflinePlayback: true, PublicDeploymentSafe: true}
+	return Capabilities{Search: false, Metadata: true, RawAudioStream: true, PersistentCache: true, OfflinePlayback: true, PublicDeploymentSafe: true}
 }
 func localPolicy() Policy {
 	return Policy{DownloadAllowed: true, CacheAllowed: true, Notes: []string{"Local/demo media is safe to stream and cache."}}
 }
 func localProvider() Provider {
-	return Provider{ID: "local", Name: "Local Demo Library", Kind: "local", Configured: true, Enabled: true, RiskLevel: "compliant", Capabilities: localCaps(), Policy: localPolicy()}
+	return Provider{ID: "local", Name: "Мои файлы", Kind: "local", Configured: true, Enabled: true, RiskLevel: "compliant", Capabilities: localCaps(), Policy: localPolicy()}
 }
 func youtubeOfficialProvider() Provider {
 	return Provider{ID: "youtube_official", Name: "YouTube Official Embed", Kind: "youtube", Configured: false, Enabled: false, RiskLevel: "constrained", Capabilities: Capabilities{Search: false, Metadata: true, EmbedPlayback: true, PublicDeploymentSafe: true}, Policy: Policy{DownloadAllowed: false, CacheAllowed: false, RequiresAttribution: true, Notes: []string{"Use official embeds/API only."}}}

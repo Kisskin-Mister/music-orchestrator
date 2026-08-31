@@ -261,6 +261,24 @@ func (a *App) importScan(w http.ResponseWriter, r *http.Request) {
 // rather than the request, but it is re-validated against the import root
 // anyway: the root may have changed since the scan, and a stored path must
 // never become a way out of it.
+// resolveLocalFile проверяет, что файл лежит в одной из двух разрешённых папок.
+//
+// Их именно две, и раньше проверялась только первая: APP_IMPORT_ROOT — папка на
+// сервере, которую сканирует импорт по пути, а uploadDir — куда складывает
+// кнопка «Импортировать». В типовой установке APP_IMPORT_ROOT не задан вообще,
+// поэтому каждый загруженный через кнопку трек получал 403.
+func (a *App) resolveLocalFile(path string) (string, error) {
+	var lastErr error
+	for _, root := range []string{os.Getenv(importRootEnv), a.uploadDir()} {
+		safe, err := resolveImportPath(root, path)
+		if err == nil {
+			return safe, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
 func (a *App) serveLocalFile(w http.ResponseWriter, r *http.Request) {
 	fingerprint := r.PathValue("fingerprint")
 	path, ok := a.store.LocalFilePath(a.optionalUserIDFromRequest(r), "local:"+fingerprint)
@@ -268,7 +286,7 @@ func (a *App) serveLocalFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Файл не найден")
 		return
 	}
-	safe, err := resolveImportPath(os.Getenv(importRootEnv), path)
+	safe, err := a.resolveLocalFile(path)
 	if err != nil {
 		writeError(w, http.StatusForbidden, "Файл вне разрешённой папки")
 		return

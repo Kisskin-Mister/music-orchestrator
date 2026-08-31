@@ -423,10 +423,17 @@ func (a *App) playback(w http.ResponseWriter, r *http.Request) {
 	pb := Playback{TrackID: id, ProviderID: providerID, PlaybackType: "unavailable", Capabilities: pr.Capabilities, Policy: pr.Policy}
 	switch providerID {
 	case "local":
+		// Импортированный файл лежит там, куда его положил импорт, и отдаётся
+		// через /v1/local. Раньше сюда безусловно подставлялся демо-путь, и
+		// каждый загруженный трек молча упирался в 404.
 		url := "/media/demo-" + pid + ".mp3"
+		pb.Attribution = "Local demo"
+		if _, found := a.store.LocalFilePath(a.optionalUserIDFromRequest(r), id); found {
+			url = "/v1/local/" + pid
+			pb.Attribution = "Локальный файл"
+		}
 		pb.PlaybackType = "local_stream"
 		pb.StreamURL = &url
-		pb.Attribution = "Local demo"
 	case "youtube_official":
 		embed := "https://www.youtube.com/embed/" + pid
 		pb.PlaybackType = "embed"

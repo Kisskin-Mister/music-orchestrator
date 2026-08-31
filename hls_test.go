@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ func stubFFmpeg(t *testing.T, steps int, pause time.Duration, marker string) str
 	path := filepath.Join(t.TempDir(), "ffmpeg-stub")
 	script := fmt.Sprintf(`#!/usr/bin/env bash
 out="${!#}"
+if [ "$out" = "--warmup" ]; then exit 0; fi
 echo run >> %q
 : > "$out"
 for i in $(seq 1 %d); do
@@ -32,7 +34,21 @@ done
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	warmExec(t, path)
 	return path
+}
+
+// warmExec запускает только что созданный скрипт один раз впустую.
+//
+// macOS проверяет новый исполняемый файл при первом запуске: замерено — первый
+// exec стоит ~360 мс, каждый следующий 5 мс. В тесте, который меряет задержку до
+// первого байта, эта разовая плата съедает весь бюджет и выглядит как медленная
+// отдача, хотя к коду отношения не имеет.
+func warmExec(t *testing.T, path string) {
+	t.Helper()
+	cmd := exec.Command(path, "--warmup")
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	_ = cmd.Run()
 }
 
 func stubOutput(steps int) string {

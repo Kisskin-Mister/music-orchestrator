@@ -291,6 +291,7 @@ func hlsStreamApp(t *testing.T, ffmpeg string) *App {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	warmExec(t, bin)
 	app, err := NewApp(Config{
 		Addr:                  ":0",
 		Environment:           "test",

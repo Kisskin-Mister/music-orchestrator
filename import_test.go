@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,5 +159,56 @@ func TestSafeUploadNameCannotEscapeDirectory(t *testing.T) {
 	// A normal nested path keeps the real file name.
 	if got, _ := safeUploadName("Artist/Album/01.mp3"); got != "01.mp3" {
 		t.Errorf("nested path lost its file name: %q", got)
+	}
+}
+
+// Загруженный кнопкой импорта трек должен играть.
+//
+// Кнопка кладёт файлы в media/imported, а не в APP_IMPORT_ROOT — та папка нужна
+// для сканирования серверной директории и в типовой установке вообще не задана.
+// Проверяем весь путь до звука: /v1/playback отдаёт ссылку, /v1/local отдаёт байты.
+func TestUploadedTrackPlays(t *testing.T) {
+	app := testApp(t, false)
+	owner := apiKeyUserID("test-key")
+	if err := os.MkdirAll(app.uploadDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(app.uploadDir(), "song.mp3")
+	if err := os.WriteFile(path, []byte("ID3 audio bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := []LocalFile{{
+		TrackID: "local:abc", Path: path, Size: 15,
+		Track: Track{ID: "local:abc", ProviderID: "local", ProviderTrackID: "abc",
+			Title: "Загруженный трек", SourceURL: "/v1/local/abc",
+			Capabilities: localCaps(), Policy: localPolicy()},
+	}}
+	if _, _, err := app.store.BulkImportLocalFiles(owner, files); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	app.mux.ServeHTTP(rec, authReq("GET", "/v1/playback/local:abc", "", "test-key"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("playback: HTTP %d — %s", rec.Code, rec.Body.String())
+	}
+	var pb struct {
+		StreamURL    string `json:"stream_url"`
+		PlaybackType string `json:"playback_type"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pb); err != nil {
+		t.Fatal(err)
+	}
+	if pb.StreamURL != "/v1/local/abc" {
+		t.Fatalf("playback ссылается на %q вместо загруженного файла (playback_type=%q)", pb.StreamURL, pb.PlaybackType)
+	}
+
+	rec = httptest.NewRecorder()
+	app.mux.ServeHTTP(rec, authReq("GET", pb.StreamURL, "", "test-key"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("отдача файла: HTTP %d — %s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "ID3 audio bytes" {
+		t.Fatalf("отдано %q", rec.Body.String())
 	}
 }
